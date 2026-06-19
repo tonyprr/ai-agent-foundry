@@ -1,0 +1,14 @@
+agent-framework
+agent-framework-foundry
+agent-framework-azure-ai-search
+agent-framework-openai
+fastapi
+uvicorn[standard]
+pydantic-settings
+azure-identity
+azure-search-documents
+pytest
+pytest-asyncio
+httpx
+azure-cosmos
+redis
