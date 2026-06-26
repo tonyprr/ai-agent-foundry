@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 from app.config import Settings
-from app.adapters.driven.search.search_adapter import SearchAdapter
+from app.adapters.driven.search.ai_search_adapter import AISearchAdapter
 from app.adapters.driven.agent.agent_adapter import AgentAdapter
 from app.adapters.driven.storage.in_memory_store_adapter import InMemorySessionStoreAdapter
 from app.domain.services import RAGDomainService
@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Azure OpenAI resource url: {settings.azure_openai_resource_url}")
 
     # 2. Instantiate Driven Adapters
-    search_adapter = SearchAdapter(
+    search_adapter = AISearchAdapter(
         settings=settings
     )
     

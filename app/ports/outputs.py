@@ -1,5 +1,5 @@
 import abc
-from agent_framework import AgentSession
+from agent_framework import AgentSession, ContextProvider
 from app.domain.models import AgentRunResult
 
 class AgentPort(abc.ABC):
@@ -45,5 +45,24 @@ class SessionStorePort(abc.ABC):
     async def save_session(self, session: AgentSession) -> None:
         """
         Persists the state of an agent session.
+        """
+        pass
+
+
+class SearchPort(abc.ABC):
+    """
+    Output Port (secondary port) for building search context providers and validating connection.
+    """
+    @abc.abstractmethod
+    def build_context_provider(self) -> ContextProvider:
+        """
+        Builds the Microsoft Agent Framework ContextProvider.
+        """
+        pass
+
+    @abc.abstractmethod
+    async def validate_connection(self) -> bool:
+        """
+        Asynchronously validates the connection to the search index.
         """
         pass

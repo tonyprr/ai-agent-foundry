@@ -65,9 +65,14 @@ app/
 │   ├── driving/
 │   │   └── fastapi_api.py # Driving Adapter (FastAPI controllers/endpoints)
 │   └── driven/
-│       ├── agent_adapter.py # Driven Adapter implementing AgentPort with MAF
-│       ├── search_adapter.py # Driven Adapter for Azure AI Search connection & validation
-│       └── session_store_adapter.py # Driven Adapter for in-memory session persistence
+│       ├── agent/
+│       │   └── agent_adapter.py # Driven Adapter implementing AgentPort with MAF
+│       ├── search/
+│       │   └── ai_search_adapter.py # Driven Adapter implementing SearchPort for Azure AI Search
+│       └── storage/
+│           ├── cosmos_store_adapter.py # Driven Adapter for Cosmos DB
+│           ├── redis_store_adapter.py  # Driven Adapter for Redis
+│           └── in_memory_store_adapter.py # Driven Adapter for in-memory session persistence
 ├── config.py           # Application settings (Pydantic BaseSettings)
 └── main.py             # Composition Root (Dependency Injection setup & FastAPI initialization)
 ```

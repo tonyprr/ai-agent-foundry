@@ -6,16 +6,14 @@ os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
 
 from app.config import Settings
 from app.adapters.driven.storage.in_memory_store_adapter import InMemorySessionStoreAdapter
-from app.adapters.driven.search.search_adapter import SearchAdapter
+from app.adapters.driven.search.ai_search_adapter import AISearchAdapter
 from app.adapters.driven.agent.agent_adapter import AgentAdapter
 
 async def main():
     settings = Settings(mock_mode=True)
     session_store = InMemorySessionStoreAdapter()
-    search_adapter = SearchAdapter(
-        default_endpoint="mock-endpoint",
-        default_index="mock-index",
-        default_key="mock-key"
+    search_adapter = AISearchAdapter(
+        settings=settings
     )
     agent_adapter = AgentAdapter(settings, search_adapter, session_store)
     

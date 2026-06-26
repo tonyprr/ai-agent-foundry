@@ -6,12 +6,12 @@ from azure.identity.aio import DefaultAzureCredential
 from azure.core.credentials import AzureKeyCredential
 
 from agent_framework.azure import AzureAISearchContextProvider
-from app.domain.models import SearchConfigOverride
+from app.ports.outputs import SearchPort
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
-class SearchAdapter:
+class AISearchAdapter(SearchPort):
     """
     Driven Adapter for Azure AI Search. 
     Handles validation of the connection and factories for MAF context providers.
@@ -22,7 +22,7 @@ class SearchAdapter:
     def build_context_provider(self) -> AzureAISearchContextProvider:
         """
         Dynamically builds the AzureAISearchContextProvider from Microsoft Agent Framework
-        using default settings merged with per-request overrides.
+        using default settings.
         """
         endpoint = self._settings.azure_search_endpoint
         index_name = self._settings.azure_search_index_name
@@ -37,25 +37,51 @@ class SearchAdapter:
             logger.info("No Azure AI Search API key provided. Using DefaultAzureCredential.")
             credential = DefaultAzureCredential()
 
-        mode = self._settings.azure_search_mode or "semantic"
+        mode = self._settings.azure_search_mode or "#"
         top_k = self._settings.azure_search_top_k or 5
 
+        # Resolve embedding function if vector field is specified to prevent ValueError
+        embedding_function = None
+        vector_field_name = self._settings.azure_search_vector_field
+        if vector_field_name:
+            if self._settings.azure_ai_foundry_endpoint:
+                from agent_framework.openai import OpenAIEmbeddingClient
+                embedding_function = OpenAIEmbeddingClient(
+                    model="text-embedding-3-small-demo",
+                    azure_endpoint=self._settings.azure_ai_foundry_endpoint,
+                    credential=DefaultAzureCredential()
+                )
+            else:
+                logger.warning(
+                    "vector_field_name is specified but no embedding credentials/endpoints are set. "
+                    "Setting vector_field_name to None to fallback to server-side or keyword search."
+                )
+                vector_field_name = None
+
+        # Build consistent parameter set for AzureAISearchContextProvider
+        kwargs = {
+            "source_id": "azure_ai_search",
+            "endpoint": endpoint,
+            "index_name": index_name,
+            "api_key": api_key if api_key else None,
+            "credential": credential,
+            "mode": mode,
+            "top_k": top_k,
+            "vector_field_name": vector_field_name,
+            "embedding_function": embedding_function,
+            "semantic_configuration_name": self._settings.azure_search_semantic_config,
+        }
+
+        # Model and OpenAI parameters are required when creating a Knowledge Base in agentic mode
+        if mode == "agentic":
+            kwargs["model"] = self._settings.azure_ai_model_deployment_name
+            kwargs["azure_openai_resource_url"] = self._settings.azure_openai_resource_url
+            kwargs["azure_openai_api_key"] = self._settings.azure_openai_api_key
+
         # Initialize the MAF context provider
-        provider = AzureAISearchContextProvider(
-            source_id="azure_ai_search",
-            endpoint=endpoint,
-            index_name=index_name,
-            api_key=api_key if api_key else None,
-            credential=credential,
-            mode=mode,
-            top_k=top_k,
-            # vector_field_name=self._settings.azure_search_vector_field,
-            # semantic_configuration_name=self._settings.azure_search_semantic_config,
-            # context_prompt=config.context_prompt,
-            model=self._settings.azure_ai_model_deployment_name,
-            azure_openai_resource_url=self._settings.azure_openai_resource_url,
-            azure_openai_api_key=self._settings.azure_openai_api_key
-        )
+        logger.info(f"search mode: {mode}")
+        provider = AzureAISearchContextProvider(**kwargs)
+
         return provider
 
     async def validate_connection(self) -> bool:

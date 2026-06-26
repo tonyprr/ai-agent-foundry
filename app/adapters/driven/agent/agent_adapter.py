@@ -22,10 +22,9 @@ from agent_framework.openai import OpenAIChatClient
 from agent_framework._types import ChatResponse
 from agent_framework._tools import FunctionTool
 
-from app.ports.outputs import AgentPort, SessionStorePort
+from app.ports.outputs import AgentPort, SessionStorePort, SearchPort
 from app.domain.models import ApprovalRequestInfo, AgentRunResult
 from app.config import Settings
-from app.adapters.driven.search.search_adapter import SearchAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +279,7 @@ class AgentAdapter(AgentPort):
     _crypto_pricing_agent = None
     _openzeppelin_agent = None
 
-    def __init__(self, settings: Settings, search_adapter: SearchAdapter, session_store: SessionStorePort):
+    def __init__(self, settings: Settings, search_adapter: SearchPort, session_store: SessionStorePort):
         self._settings = settings
         self._search_adapter = search_adapter
         self._session_store = session_store
