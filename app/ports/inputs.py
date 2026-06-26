@@ -11,3 +11,16 @@ class RAGUseCasePort(abc.ABC):
         Asynchronously processes a user query, retrieving context and returning the RAG response.
         """
         pass
+
+    @abc.abstractmethod
+    async def approve_request(
+        self,
+        thread_id: str,
+        request_id: str,
+        approved: bool
+    ) -> RAGQueryResponse:
+        """
+        Approves or denies a pending tool execution and resumes the workflow.
+        """
+        pass
+

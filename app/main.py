@@ -4,9 +4,9 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 from app.config import Settings
-from app.adapters.driven.search_adapter import SearchAdapter
-from app.adapters.driven.agent_adapter import AgentAdapter
-from app.adapters.driven.in_memory_store_adapter import InMemorySessionStoreAdapter
+from app.adapters.driven.search.search_adapter import SearchAdapter
+from app.adapters.driven.agent.agent_adapter import AgentAdapter
+from app.adapters.driven.storage.in_memory_store_adapter import InMemorySessionStoreAdapter
 from app.domain.services import RAGDomainService
 from app.adapters.driving.fastapi_api import router as chat_router
 
@@ -36,25 +36,24 @@ async def lifespan(app: FastAPI):
 
     # 2. Instantiate Driven Adapters
     search_adapter = SearchAdapter(
-        default_endpoint=settings.azure_search_endpoint,
-        default_index=settings.azure_search_index_name,
-        default_key=settings.azure_search_api_key
-    )
-    
-    agent_adapter = AgentAdapter(
-        settings=settings,
-        search_adapter=search_adapter
+        settings=settings
     )
     
     # Instantiate configured session store adapter
     if settings.session_store_type == "cosmos":
-        from app.adapters.driven.cosmos_store_adapter import CosmosDBSessionStoreAdapter
+        from app.adapters.driven.storage.cosmos_store_adapter import CosmosDBSessionStoreAdapter
         session_store_adapter = CosmosDBSessionStoreAdapter(settings=settings)
     elif settings.session_store_type == "redis":
-        from app.adapters.driven.redis_store_adapter import RedisSessionStoreAdapter
+        from app.adapters.driven.storage.redis_store_adapter import RedisSessionStoreAdapter
         session_store_adapter = RedisSessionStoreAdapter(settings=settings)
     else:
         session_store_adapter = InMemorySessionStoreAdapter()
+        
+    agent_adapter = AgentAdapter(
+        settings=settings,
+        search_adapter=search_adapter,
+        session_store=session_store_adapter
+    )
     
     # 3. Instantiate Domain Service (Dependency Injection container)
     domain_service = RAGDomainService(

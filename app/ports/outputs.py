@@ -1,6 +1,6 @@
 import abc
 from agent_framework import AgentSession
-from app.domain.models import SearchConfigOverride
+from app.domain.models import AgentRunResult
 
 class AgentPort(abc.ABC):
     """
@@ -10,13 +10,25 @@ class AgentPort(abc.ABC):
     async def run_agent(
         self,
         message: str,
-        session: AgentSession,
-        search_config: SearchConfigOverride
-    ) -> str:
+        session: AgentSession
+    ) -> AgentRunResult:
         """
-        Asynchronously runs the agent using a specific session and search index configuration.
+        Asynchronously runs the agent workflow.
         """
         pass
+
+    @abc.abstractmethod
+    async def resume_run(
+        self,
+        session: AgentSession,
+        request_id: str,
+        approved: bool
+    ) -> AgentRunResult:
+        """
+        Resumes a paused workflow run after receiving user approval/denial.
+        """
+        pass
+
 
 class SessionStorePort(abc.ABC):
     """

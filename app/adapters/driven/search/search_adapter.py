@@ -7,6 +7,7 @@ from azure.core.credentials import AzureKeyCredential
 
 from agent_framework.azure import AzureAISearchContextProvider
 from app.domain.models import SearchConfigOverride
+from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +16,17 @@ class SearchAdapter:
     Driven Adapter for Azure AI Search. 
     Handles validation of the connection and factories for MAF context providers.
     """
-    def __init__(self, default_endpoint: Optional[str], default_index: Optional[str], default_key: Optional[str]):
-        self._default_endpoint = default_endpoint
-        self._default_index = default_index
-        self._default_key = default_key
+    def __init__(self, settings: Settings):
+        self._settings = settings
 
-    def build_context_provider(self, config: SearchConfigOverride) -> AzureAISearchContextProvider:
+    def build_context_provider(self) -> AzureAISearchContextProvider:
         """
         Dynamically builds the AzureAISearchContextProvider from Microsoft Agent Framework
         using default settings merged with per-request overrides.
         """
-        endpoint = config.endpoint or self._default_endpoint
-        index_name = config.index_name or self._default_index
-        api_key = config.api_key or self._default_key
+        endpoint = self._settings.azure_search_endpoint
+        index_name = self._settings.azure_search_index_name
+        api_key = self._settings.azure_search_api_key
         
         if not endpoint or not index_name:
             raise ValueError("Azure AI Search Endpoint and Index Name must be configured.")
@@ -38,8 +37,8 @@ class SearchAdapter:
             logger.info("No Azure AI Search API key provided. Using DefaultAzureCredential.")
             credential = DefaultAzureCredential()
 
-        mode = config.mode or "semantic"
-        top_k = config.top_k or 5
+        mode = self._settings.azure_search_mode or "semantic"
+        top_k = self._settings.azure_search_top_k or 5
 
         # Initialize the MAF context provider
         provider = AzureAISearchContextProvider(
@@ -48,25 +47,25 @@ class SearchAdapter:
             index_name=index_name,
             api_key=api_key if api_key else None,
             credential=credential,
-            mode="agentic",
+            mode=mode,
             top_k=top_k,
-            # vector_field_name=config.vector_field_name,
-            # semantic_configuration_name=config.semantic_configuration_name,
-            context_prompt=config.context_prompt,
-            model=config.model,
-            azure_openai_resource_url=config.azure_openai_resource_url,
-            azure_openai_api_key=config.azure_openai_api_key
+            # vector_field_name=self._settings.azure_search_vector_field,
+            # semantic_configuration_name=self._settings.azure_search_semantic_config,
+            # context_prompt=config.context_prompt,
+            model=self._settings.azure_ai_model_deployment_name,
+            azure_openai_resource_url=self._settings.azure_openai_resource_url,
+            azure_openai_api_key=self._settings.azure_openai_api_key
         )
         return provider
 
-    async def validate_connection(self, config: SearchConfigOverride) -> bool:
+    async def validate_connection(self) -> bool:
         """
         Asynchronously validates connection parameters by querying the index statistics.
         Uses advanced asynchronous SearchClient.
         """
-        endpoint = config.endpoint or self._default_endpoint
-        index_name = config.index_name or self._default_index
-        api_key = config.api_key or self._default_key
+        endpoint = self._settings.azure_search_endpoint
+        index_name = self._settings.azure_search_index_name
+        api_key = self._settings.azure_search_api_key
 
         if not endpoint or not index_name:
             return False

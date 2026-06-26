@@ -1,5 +1,6 @@
 import os
 os.environ["MOCK_MODE"] = "True"
+os.environ["SESSION_STORE_TYPE"] = "memory"
 # Clear search fields that trigger SDK validation requirements in tests
 os.environ["AZURE_SEARCH_VECTOR_FIELD"] = ""
 os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
@@ -20,10 +21,11 @@ def test_health_check():
         assert data["status"] == "healthy"
         assert "Microsoft Agent Framework" in data["framework"]
 
+
 def test_rag_chat_endpoint_with_overrides():
     """
-    Test the main chat endpoint. Verifies that user queries are processed,
-    custom thread IDs are honored, and dynamic search overrides are registered.
+    Test the main chat endpoint. Verifies that passing search_overrides
+    is rejected with a 400 Bad Request.
     """
     with TestClient(app) as client:
         payload = {
@@ -37,18 +39,10 @@ def test_rag_chat_endpoint_with_overrides():
         }
         
         response = client.post("/api/v1/chat", json=payload)
-        assert response.status_code == 200
-        
+        assert response.status_code == 400
         data = response.json()
-        assert "response_text" in data
-        assert data["thread_id"] == "test_thread_999"
-        
-        # Verify metadata reflection of the applied overrides
-        metadata = data["metadata"]
-        assert metadata["search_index"] == "special-index"
-        assert metadata["search_mode"] == "semantic"
-        assert metadata["search_top_k"] == 3
-        assert metadata["mock_mode"] is True
+        assert "search_overrides are not permitted" in data["detail"]
+
 
 def test_rag_chat_session_id_generation():
     """
@@ -67,3 +61,44 @@ def test_rag_chat_session_id_generation():
         assert "response_text" in data
         assert "thread_id" in data
         assert data["thread_id"].startswith("thread_")
+
+
+def test_openzeppelin_hitl_approval_workflow():
+    """
+    Test the complete OpenZeppelin human-in-the-loop (HITL) workflow:
+    1. Send a request about smart contracts, routing to the OpenZeppelin agent.
+    2. Check that the workflow suspends, returning a pending approval request.
+    3. Call the /chat/approve endpoint to approve the tool execution.
+    4. Verify that execution resumes and the final contract response is returned.
+    """
+    with TestClient(app) as client:
+        # Step 1: Send request requiring OpenZeppelin Solidity agent
+        payload = {
+            "message": "Develop a Solidity contract using OpenZeppelin",
+            "thread_id": "oz_thread_123"
+        }
+        
+        response = client.post("/api/v1/chat", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify the workflow suspended with a pending approval
+        assert data["approval_request"] is not None
+        req_info = data["approval_request"]
+        assert req_info["tool_name"] == "openzeppelin_develop_contract"
+        request_id = req_info["request_id"]
+        
+        # Step 2: Approve the request
+        approve_payload = {
+            "thread_id": "oz_thread_123",
+            "request_id": request_id,
+            "approved": True
+        }
+        
+        approve_response = client.post("/api/v1/chat/approve", json=approve_payload)
+        assert approve_response.status_code == 200
+        approve_data = approve_response.json()
+        
+        # The execution should have resumed and returned the Solidity code
+        assert "pragma solidity" in approve_data["response_text"]
+        assert approve_data["approval_request"] is None

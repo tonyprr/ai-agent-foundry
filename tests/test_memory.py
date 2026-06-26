@@ -15,8 +15,8 @@ from agent_framework._compaction import (
 )
 
 from app.config import Settings
-from app.adapters.driven.cosmos_store_adapter import CosmosDBSessionStoreAdapter
-from app.adapters.driven.redis_store_adapter import RedisSessionStoreAdapter
+from app.adapters.driven.storage.cosmos_store_adapter import CosmosDBSessionStoreAdapter
+from app.adapters.driven.storage.redis_store_adapter import RedisSessionStoreAdapter
 
 @pytest.mark.asyncio
 async def test_cosmos_adapter_fallback_mode():

@@ -26,13 +26,17 @@ class RAGDomainService(RAGUseCasePort):
     async def process_query(self, request: RAGQueryRequest) -> RAGQueryResponse:
         """
         Main domain business logic flow:
-        1. Resolves/generates conversation thread ID.
-        2. Retrieves session context.
-        3. Merges default search configurations with request-level overrides.
-        4. Triggers the MAF Agent query.
+        1. Validates that search_overrides are not supplied.
+        2. Resolves/generates conversation thread ID.
+        3. Retrieves session context.
+        4. Triggers the multi-agent Handoff Orchestration.
         5. Saves updated session state.
-        6. Returns RAG response models.
+        6. Returns RAG response models (including any pending approval request).
         """
+        if request.search_overrides is not None:
+            logger.warning("Rejected request containing search_overrides.")
+            raise ValueError("search_overrides are not permitted in the public API.")
+
         # Resolve or generate a new unique conversation thread ID
         thread_id = request.thread_id or f"thread_{uuid.uuid4().hex[:12]}"
         logger.info(f"Processing query for thread '{thread_id}'")
@@ -40,58 +44,61 @@ class RAGDomainService(RAGUseCasePort):
         # 1. Fetch or initialize the conversation session
         session = await self._session_store_port.get_or_create_session(thread_id)
 
-        # 2. Build configuration with dynamic per-query overrides
-        search_config = self._build_search_config(request.search_overrides)
-
-        # 3. Call the agent output port asynchronously
-        response_text = await self._agent_port.run_agent(
+        # 2. Call the agent output port asynchronously
+        run_result = await self._agent_port.run_agent(
             message=request.message,
-            session=session,
-            search_config=search_config
+            session=session
         )
 
-        # 4. Save back the updated session context (persisting memory state)
+        # 3. Save back the updated session context (persisting memory state)
         await self._session_store_port.save_session(session)
 
-        # 5. Build response metadata showing the configuration details applied
+        # 4. Build response metadata showing the configuration details applied
         metadata = {
-            "search_endpoint": search_config.endpoint,
-            "search_index": search_config.index_name,
-            "search_mode": search_config.mode,
-            "search_top_k": search_config.top_k,
-            "mock_mode": self._settings.mock_mode
+            "mock_mode": self._settings.mock_mode,
+            "memory_compaction_strategy": self._settings.memory_compaction_strategy
         }
 
         return RAGQueryResponse(
-            response_text=response_text,
+            response_text=run_result.response_text,
             thread_id=thread_id,
-            metadata=metadata
+            metadata=metadata,
+            approval_request=run_result.approval_request
         )
 
-    def _build_search_config(self, overrides: Optional[SearchConfigOverride]) -> SearchConfigOverride:
+    async def approve_request(
+        self,
+        thread_id: str,
+        request_id: str,
+        approved: bool
+    ) -> RAGQueryResponse:
         """
-        Merges global defaults from config with dynamic request-level overrides.
+        Resumes a paused workflow run after receiving user approval/denial for a pending tool call.
         """
-        # Base config from settings
-        default_config = SearchConfigOverride(
-            endpoint=self._settings.azure_search_endpoint,
-            index_name=self._settings.azure_search_index_name,
-            api_key=self._settings.azure_search_api_key,
-            mode=self._settings.azure_search_mode,
-            top_k=self._settings.azure_search_top_k,
-            vector_field_name=self._settings.azure_search_vector_field,
-            semantic_configuration_name=self._settings.azure_search_semantic_config,
-            model=self._settings.azure_ai_model_deployment_name,
-            azure_openai_resource_url=self._settings.azure_openai_resource_url,
-            azure_openai_api_key=self._settings.azure_openai_api_key
+        logger.info(f"Processing approval for thread '{thread_id}', request '{request_id}': approved={approved}")
+
+        # 1. Fetch the conversation session
+        session = await self._session_store_port.get_or_create_session(thread_id)
+
+        # 2. Resume agent execution
+        run_result = await self._agent_port.resume_run(
+            session=session,
+            request_id=request_id,
+            approved=approved
         )
 
-        if not overrides:
-            return default_config
+        # 3. Save updated session state
+        await self._session_store_port.save_session(session)
 
-        # Merge defaults and overrides
-        merged_dict = default_config.model_dump()
-        override_dict = overrides.model_dump(exclude_unset=True)
-        merged_dict.update(override_dict)
+        metadata = {
+            "mock_mode": self._settings.mock_mode,
+            "memory_compaction_strategy": self._settings.memory_compaction_strategy
+        }
 
-        return SearchConfigOverride(**merged_dict)
+        return RAGQueryResponse(
+            response_text=run_result.response_text,
+            thread_id=thread_id,
+            metadata=metadata,
+            approval_request=run_result.approval_request
+        )
+

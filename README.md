@@ -1,6 +1,6 @@
 # Hexagonal RAG Agent Demo (Microsoft Agent Framework & FastAPI)
 
-A senior-level Python demonstration showcasing a Retrieval-Augmented Generation (RAG) system built with **FastAPI** and the **Microsoft Agent Framework (MAF)**. This project implements **Hexagonal Architecture (Ports and Adapters)**, providing a clean separation of concerns and a robust foundation for production-ready AI agents.
+Retrieval-Augmented Generation (RAG) system built with **FastAPI** and the **Microsoft Agent Framework (MAF)**. This project implements **Hexagonal Architecture (Ports and Adapters)**, providing a clean separation of concerns and a robust foundation for production-ready AI agents.
 
 ---
 
@@ -115,11 +115,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "message": "What is Bitcoin?",
-    "thread_id": "session-123-abc",
-    "search_overrides": {
-      "mode": "agentic",
-      "top_k": 8
-    }
+    "thread_id": "session-123-abc"
   }'
 ```
 
