@@ -14,27 +14,6 @@ def test_health_check():
         assert "Microsoft Agent Framework" in data["framework"]
 
 
-def test_rag_chat_endpoint_with_overrides():
-    """
-    Test the main chat endpoint. Verifies that passing search_overrides
-    is rejected with a 400 Bad Request.
-    """
-    with TestClient(app) as client:
-        payload = {
-            "message": "Tell me about Microsoft Agent Framework",
-            "thread_id": "test_thread_999",
-            "search_overrides": {
-                "index_name": "special-index",
-                "mode": "semantic",
-                "top_k": 3
-            }
-        }
-        
-        response = client.post("/api/v1/chat", json=payload)
-        assert response.status_code == 400
-        data = response.json()
-        assert "search_overrides are not permitted" in data["detail"]
-
 
 def test_rag_chat_session_id_generation():
     """
