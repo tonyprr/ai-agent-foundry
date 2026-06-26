@@ -37,7 +37,7 @@ class AISearchAdapter(SearchPort):
             logger.info("No Azure AI Search API key provided. Using DefaultAzureCredential.")
             credential = DefaultAzureCredential()
 
-        mode = self._settings.azure_search_mode or "#"
+        mode = self._settings.azure_search_mode or "semantic"
         top_k = self._settings.azure_search_top_k or 5
 
         # Resolve embedding function if vector field is specified to prevent ValueError

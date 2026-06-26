@@ -18,35 +18,48 @@ Retrieval-Augmented Generation (RAG) system built with **FastAPI** and the **Mic
 ## Architecture Blueprint
 
 ```
-                     +-------------------------------------------------+
-                     |                 DRIVING ADAPTER                 |
-                     |             (FastAPI HTTP endpoints)            |
-                     +-----------------------+-------------------------+
-                                             |
-                                             v (Uses)
-                     +-------------------------------------------------+
-                     |                   INPUT PORT                    |
-                     |               (RAGUseCasePort)                  |
-                     +-----------------------+-------------------------+
-                                             |
-                                             v (Implements)
-                     +-------------------------------------------------+
-                     |                  CORE DOMAIN                    |
-                     |             (RAGDomainService)                  |
-                     +------------+-----------------------+------------+
-                                  |                       |
-                        (Uses)    v                       v (Uses)
-                     +------------+----+             +----+------------+
-                     |   OUTPUT PORT   |             |   OUTPUT PORT   |
-                     |   (AgentPort)   |             | (SessionStore)  |
-                     +------------+----+             +----+------------+
-                                  |                       |
-                                  v (Implemented by)      v (Implemented by)
-                     +------------+----+             +----+------------+
-                     |  DRIVEN ADAPTER |             |  DRIVEN ADAPTER |
-                     | (AgentAdapter)  |             | (SessionStore)  |
-                     |   [MAF Agent]   |             |   [InMemory]    |
-                     +-----------------+             +-----------------+
+                                 +---------------------------------+
+                                 |         DRIVING ADAPTER         |
+                                 |     (FastAPI HTTP Endpoints)    |
+                                 +----------------+----------------+
+                                                  |
+                                                  | (Uses)
+                                                  v
+                                 +----------------+----------------+
+                                 |           INPUT PORT            |
+                                 |        (RAGUseCasePort)         |
+                                 +----------------+----------------+
+                                                  |
+                                                  | (Implemented by)
+                                                  v
+                                 +----------------+----------------+
+                                 |          CORE DOMAIN            |
+                                 |       (RAGDomainService)        |
+                                 +---+------------+------------+---+
+                                     |            |            |
+                           (Uses)    v   (Uses)   v   (Uses)   v
+                     +---------------+--+  +------+------+  +--+---------------+
+                     |   OUTPUT PORT    |  | OUTPUT PORT |  |   OUTPUT PORT    |
+                     |   (AgentPort)    |  | (SearchPort)|  | (SessionStorePort|
+                     +-------+----------+  +------+------+  +--+---------------+
+                             |                    |            |
+             (Implemented by)|    (Implemented by)|            | (Implemented by)
+                             v                    v            v
+                     +-------+----------+  +------+------+  +--+---------------+
+                     |  DRIVEN ADAPTER  |  |DRIVEN ADAPTR|  |  DRIVEN ADAPTERS |
+                     |  (AgentAdapter)  |  |(AISearchAdpt|  | (Memory / Redis /|
+                     |  [MAF Workflow]  |  |[AzureSearch]|  |    Cosmos DB)    |
+                     +-------+----------+  +-------------+  +------------------+
+                             |
+                             | (Orchestrates Multi-Agent System)
+                             v
+       +---------------------+---------------------+---------------------+
+       |                     |                     |                     |
+       v                     v                     v                     v
++------+------+       +------+------+       +------+------+       +------+------+
+| TriageAgent |       |RAGSearchAgent       |CryptoPricing|       |OpenZeppelin |
+|             | ----> |             | ----> |    Agent    | ----> |    Agent    |
++-------------+       +-------------+       +-------------+       +-------------+
 ```
 
 ---
