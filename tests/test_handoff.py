@@ -1,13 +1,4 @@
-import os
-import pytest
 from fastapi.testclient import TestClient
-
-# Ensure test settings are correct
-os.environ["MOCK_MODE"] = "True"
-os.environ["SESSION_STORE_TYPE"] = "memory"
-os.environ["AZURE_SEARCH_VECTOR_FIELD"] = ""
-os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
-
 from app.main import app
 from app.adapters.driven.agent.agent_adapter import AgentAdapter
 

@@ -1,11 +1,3 @@
-import os
-os.environ["MOCK_MODE"] = "True"
-os.environ["SESSION_STORE_TYPE"] = "memory"
-# Clear search fields that trigger SDK validation requirements in tests
-os.environ["AZURE_SEARCH_VECTOR_FIELD"] = ""
-os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
-
-import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 

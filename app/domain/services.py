@@ -55,7 +55,6 @@ class RAGDomainService(RAGUseCasePort):
 
         # 4. Build response metadata showing the configuration details applied
         metadata = {
-            "mock_mode": self._settings.mock_mode,
             "memory_compaction_strategy": self._settings.memory_compaction_strategy
         }
 
@@ -91,7 +90,6 @@ class RAGDomainService(RAGUseCasePort):
         await self._session_store_port.save_session(session)
 
         metadata = {
-            "mock_mode": self._settings.mock_mode,
             "memory_compaction_strategy": self._settings.memory_compaction_strategy
         }
 

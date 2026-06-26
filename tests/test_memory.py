@@ -1,10 +1,6 @@
-import os
-# Force mock mode for all tests
-os.environ["MOCK_MODE"] = "True"
-os.environ["AZURE_SEARCH_VECTOR_FIELD"] = ""
-os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
-
 import pytest
+import json
+from unittest.mock import AsyncMock, patch, MagicMock
 from agent_framework import AgentSession, Message
 from agent_framework._compaction import (
     SlidingWindowStrategy,
@@ -19,66 +15,105 @@ from app.adapters.driven.storage.cosmos_store_adapter import CosmosDBSessionStor
 from app.adapters.driven.storage.redis_store_adapter import RedisSessionStoreAdapter
 
 @pytest.mark.asyncio
-async def test_cosmos_adapter_fallback_mode():
+async def test_cosmos_adapter_validation():
     """
-    Verifies that CosmosDBSessionStoreAdapter falls back gracefully to in-memory store
-    when credentials are not provided, preserving session state correctly across calls.
+    Verifies that CosmosDBSessionStoreAdapter raises ValueError when credentials are missing.
     """
     settings = Settings(
         cosmos_endpoint=None,
         cosmos_key=None,
         session_store_type="cosmos"
     )
-    
-    adapter = CosmosDBSessionStoreAdapter(settings=settings)
-    thread_id = "cosmos_test_thread"
-    
-    # 1. Retrieve or create session
-    session = await adapter.get_or_create_session(thread_id)
-    assert isinstance(session, AgentSession)
-    assert session.session_id == thread_id
-    assert "messages" not in session.state
-    
-    # 2. Add message to session state
-    session.state["messages"] = [{"role": "user", "contents": [{"type": "text", "text": "Hello Cosmos"}]}]
-    await adapter.save_session(session)
-    
-    # 3. Retrieve session again and verify persistence
-    retrieved_session = await adapter.get_or_create_session(thread_id)
-    assert retrieved_session.session_id == thread_id
-    assert retrieved_session.state["messages"][0]["contents"][0]["text"] == "Hello Cosmos"
-    
-    await adapter.close()
+    with pytest.raises(ValueError, match="Cosmos DB endpoint and key must be fully configured."):
+        CosmosDBSessionStoreAdapter(settings=settings)
 
 @pytest.mark.asyncio
-async def test_redis_adapter_fallback_mode():
+async def test_cosmos_adapter_operations():
     """
-    Verifies that RedisSessionStoreAdapter falls back gracefully to in-memory store
-    when the connection is not active or URL is omitted, preserving state.
+    Verifies that CosmosDBSessionStoreAdapter correctly retrieves and saves sessions via Cosmos Client mocks.
+    """
+    settings = Settings(
+        cosmos_endpoint="https://mock-endpoint.documents.azure.com:443/",
+        cosmos_key="mock-key",
+        session_store_type="cosmos"
+    )
+    
+    adapter = CosmosDBSessionStoreAdapter(settings=settings)
+    
+    # Set up mock container and client
+    mock_container = AsyncMock()
+    mock_db = AsyncMock()
+    mock_client = AsyncMock()
+    
+    mock_db.create_container_if_not_exists.return_value = mock_container
+    mock_client.create_database_if_not_exists.return_value = mock_db
+    
+    adapter._container = mock_container
+    adapter._client = mock_client
+    
+    thread_id = "cosmos_test_thread"
+    session_data = {"session_id": thread_id, "state": {"test_key": "test_value"}}
+    
+    # 1. Mock get_or_create_session (Found case)
+    mock_container.read_item.return_value = session_data
+    session = await adapter.get_or_create_session(thread_id)
+    assert session.session_id == thread_id
+    assert session.state["test_key"] == "test_value"
+    mock_container.read_item.assert_called_once_with(item=thread_id, partition_key=thread_id)
+    
+    # 2. Mock save_session
+    await adapter.save_session(session)
+    mock_container.upsert_item.assert_called_once()
+    upserted_body = mock_container.upsert_item.call_args[1]["body"]
+    assert upserted_body["id"] == thread_id
+    assert upserted_body["state"]["test_key"] == "test_value"
+
+@pytest.mark.asyncio
+async def test_redis_adapter_validation():
+    """
+    Verifies that RedisSessionStoreAdapter raises ValueError when URL is missing.
     """
     settings = Settings(
         redis_url="",
         session_store_type="redis"
     )
+    with pytest.raises(ValueError, match="Redis URL must be configured."):
+        RedisSessionStoreAdapter(settings=settings)
+
+@pytest.mark.asyncio
+async def test_redis_adapter_operations():
+    """
+    Verifies that RedisSessionStoreAdapter correctly retrieves and saves sessions via Redis Client mocks.
+    """
+    settings = Settings(
+        redis_url="redis://localhost:6379/0",
+        session_store_type="redis"
+    )
     
     adapter = RedisSessionStoreAdapter(settings=settings)
+    
+    # Set up mock Redis client
+    mock_client = AsyncMock()
+    adapter._client = mock_client
+    
     thread_id = "redis_test_thread"
+    session_data = {"session_id": thread_id, "state": {"test_key": "test_value"}}
     
-    # 1. Retrieve or create session
+    # 1. Mock get_or_create_session (Found case)
+    mock_client.get.return_value = json.dumps(session_data)
     session = await adapter.get_or_create_session(thread_id)
-    assert isinstance(session, AgentSession)
     assert session.session_id == thread_id
+    assert session.state["test_key"] == "test_value"
+    mock_client.get.assert_called_once_with(f"session:{thread_id}")
     
-    # 2. Add message to session state
-    session.state["messages"] = [{"role": "user", "contents": [{"type": "text", "text": "Hello Redis"}]}]
+    # 2. Mock save_session
     await adapter.save_session(session)
-    
-    # 3. Retrieve session again and verify persistence
-    retrieved_session = await adapter.get_or_create_session(thread_id)
-    assert retrieved_session.session_id == thread_id
-    assert retrieved_session.state["messages"][0]["contents"][0]["text"] == "Hello Redis"
-    
-    await adapter.close()
+    mock_client.set.assert_called_once()
+    set_key = mock_client.set.call_args[0][0]
+    set_value = mock_client.set.call_args[0][1]
+    assert set_key == f"session:{thread_id}"
+    assert "test_value" in set_value
+
 
 @pytest.mark.asyncio
 async def test_sliding_window_compaction_strategy():

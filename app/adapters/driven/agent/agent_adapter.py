@@ -1,16 +1,12 @@
 import logging
-import uuid
 import json
-from typing import List, Dict, Any, Sequence, Callable, Literal, Collection, Optional, Mapping, AsyncIterable
+from typing import Any
 
 from agent_framework import (
-    Agent,
     AgentSession,
     Message,
     Content,
     WorkflowRunState,
-    ContextProvider,
-    SessionContext
 )
 from agent_framework._workflows._checkpoint import CheckpointStorage as BaseCheckpointStorage, WorkflowCheckpoint, CheckpointID
 from agent_framework._workflows._checkpoint_encoding import encode_checkpoint_value, decode_checkpoint_value
@@ -18,35 +14,18 @@ from agent_framework.exceptions import WorkflowCheckpointException
 from agent_framework_orchestrations import HandoffBuilder
 from agent_framework_orchestrations._handoff import HandoffAgentUserRequest
 from agent_framework.foundry import FoundryChatClient
-from agent_framework.openai import OpenAIChatClient
-from agent_framework._types import ChatResponse
-from agent_framework._tools import FunctionTool
 
 from app.ports.outputs import AgentPort, SessionStorePort, SearchPort
 from app.domain.models import ApprovalRequestInfo, AgentRunResult
 from app.config import Settings
+from app.adapters.driven.agent.agents import (
+    TriageAgent,
+    RAGSearchAgent,
+    CryptoPricingAgent,
+    OpenZeppelinAgent,
+)
 
 logger = logging.getLogger(__name__)
-
-class SimpleMockContextProvider(ContextProvider):
-    """
-    A custom mock ContextProvider that simulates retrieval results for local/offline testing.
-    """
-    def __init__(self, index_name: str, top_k: int):
-        super().__init__(source_id="mock_search")
-        self.index_name = index_name
-        self.top_k = top_k
-
-    async def get_context(self, context: SessionContext) -> str:
-        # Simulate retrieved text based on index settings
-        return (
-            f"[Source: Document_1.txt (Mocked from index '{self.index_name}')]\n"
-            "This is simulated context. Microsoft Agent Framework (MAF) is a pro-code, "
-            "enterprise-grade SDK that unifies concepts from AutoGen and Semantic Kernel.\n\n"
-            f"[Source: Document_2.txt (Mocked retrieval, top_k={self.top_k})]\n"
-            "FastAPI is an asynchronous web framework for building APIs in Python. "
-            "Hexagonal Architecture isolates business logic from external frameworks and technologies."
-        )
 
 class CheckpointStorage(BaseCheckpointStorage):
     """
@@ -122,152 +101,6 @@ class CheckpointStorage(BaseCheckpointStorage):
             return [self.active_session.session_id]
         return []
 
-from agent_framework._middleware import ChatMiddlewareLayer
-from agent_framework._tools import FunctionInvocationLayer
-from agent_framework.observability import ChatTelemetryLayer
-from agent_framework import BaseChatClient
-
-class MockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelemetryLayer, BaseChatClient):
-    STORES_BY_DEFAULT = False
-    
-    def __init__(self, agent_name: str, **kwargs: Any):
-        self.agent_name = agent_name
-        self.model = "mock-model"
-        super().__init__(**kwargs)
-        
-    async def _inner_get_response(self, *, messages, stream, options, **kwargs):
-        logger.info(f"DEBUG MockChatClient [{self.agent_name}]: message count={len(messages)}")
-        for idx, msg in enumerate(messages):
-            logger.info(f"  Msg {idx}: role={msg.role}, author={getattr(msg, 'author_name', None)}")
-            for c_idx, c in enumerate(msg.contents):
-                logger.info(f"    Content {c_idx}: type={c.type}, call_id={getattr(c, 'call_id', None) or getattr(c, 'id', None)}, approved={getattr(c, 'approved', None)}")
-        
-        # Find the last user message
-        last_msg = ""
-        for m in reversed(messages):
-            if m.role == "user":
-                last_msg = m.text
-                break
-        last_msg_lower = last_msg.lower() if last_msg else ""
-        
-        # Extract if there is any tool result in the messages
-        tool_result = None
-        for m in reversed(messages):
-            if m.role == "tool" or m.role == "assistant":
-                for c in m.contents:
-                    if c.type == "function_result":
-                        tool_result = c
-                        break
-                if tool_result:
-                    break
-
-        reply_contents = []
-        
-        if self.agent_name == "TriageAgent":
-            if "solidity" in last_msg_lower or "contract" in last_msg_lower or "openzeppelin" in last_msg_lower:
-                reply_contents.append("Routing to OpenZeppelinAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_OpenZeppelinAgent",
-                    arguments={},
-                    call_id=f"triage_{uuid.uuid4().hex[:8]}"
-                ))
-            elif "price" in last_msg_lower or "pricing" in last_msg_lower or "coingecko" in last_msg_lower:
-                reply_contents.append("Routing to CryptoPricingAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_CryptoPricingAgent",
-                    arguments={},
-                    call_id=f"triage_{uuid.uuid4().hex[:8]}"
-                ))
-            elif "bitcoin" in last_msg_lower or "blockchain" in last_msg_lower:
-                reply_contents.append("Routing to RAGSearchAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_RAGSearchAgent",
-                    arguments={},
-                    call_id=f"triage_{uuid.uuid4().hex[:8]}"
-                ))
-            else:
-                reply_contents.append(
-                    "Hello! I am the Triage Agent. I can route you to: RAG Search, Crypto Pricing, or OpenZeppelin Solidity agents. What do you need?"
-                )
-                
-        elif self.agent_name == "RAGSearchAgent":
-            reply_contents.append(
-                "[Source: Document_1.txt]\n"
-                "Microsoft Agent Framework (MAF) is a professional, multi-agent orchestration framework. "
-                "Bitcoin is a decentralized digital currency."
-            )
-            
-        elif self.agent_name == "CryptoPricingAgent":
-            if tool_result:
-                res_val = tool_result.result if hasattr(tool_result, "result") else ""
-                reply_contents.append(f"[MOCK RESPONSE] Based on the pricing service: {res_val}")
-            else:
-                reply_contents.append(Content.from_function_call(
-                    name="get_crypto_price",
-                    arguments={"coin_id": "bitcoin"},
-                    call_id=f"crypto_{uuid.uuid4().hex[:8]}"
-                ))
-                
-        elif self.agent_name == "OpenZeppelinAgent":
-            if tool_result:
-                contract_code = tool_result.result if hasattr(tool_result, "result") else ""
-                reply_contents.append(
-                    f"Here is your Solidity contract:\n{contract_code}"
-                )
-            else:
-                reply_contents.append(Content.from_function_call(
-                    name="openzeppelin_develop_contract",
-                    arguments={"contract_type": "ERC20"},
-                    call_id=f"openzeppelin_{uuid.uuid4().hex[:8]}"
-                ))
-                
-        msg_contents = []
-        has_func_call = False
-        for c in reply_contents:
-            if isinstance(c, str):
-                msg_contents.append(Content.from_text(text=c))
-            else:
-                msg_contents.append(c)
-                if c.type == "function_call":
-                    has_func_call = True
-                
-        response_msg = Message(role="assistant", contents=msg_contents, author_name=self.agent_name)
-        logger.info(f"DEBUG MockChatClient [{self.agent_name}]: returned msg with call_ids {[c.call_id for c in msg_contents if hasattr(c, 'call_id')]}")
-        
-        return ChatResponse(
-            messages=[response_msg],
-            finish_reason="tool_calls" if has_func_call else "stop",
-            model=self.model
-        )
-
-def crypto_get_price(coin_id: str) -> str:
-    """
-    Get the live price of a cryptocurrency in USD.
-    
-    Args:
-        coin_id: The ID of the coin, e.g., 'bitcoin', 'ethereum', 'solana'.
-    """
-    return f"The live price of {coin_id} is $65,000 USD (mocked)."
-
-def openzeppelin_develop_contract(contract_type: str, features: list[str] | None = None) -> str:
-    """
-    Develop a Solidity smart contract using OpenZeppelin.
-    
-    Args:
-        contract_type: The type of contract, e.g., 'ERC20', 'ERC721', 'ERC1155'.
-        features: Optional list of features, e.g., 'mintable', 'burnable', 'pausable'.
-    """
-    feat_str = f" with features {', '.join(features)}" if features else ""
-    return (
-        f"// SPDX-License-Identifier: MIT\n"
-        f"pragma solidity ^0.8.20;\n\n"
-        f"import \"@openzeppelin/contracts/token/{contract_type}/{contract_type}.sol\";\n\n"
-        f"contract Mock{contract_type} is {contract_type} {{\n"
-        f"    constructor() {contract_type}(\"MockToken\", \"MTK\") {{\n"
-        f"        // Generated {contract_type}{feat_str}\n"
-        f"    }}\n"
-        f"}}"
-    )
 
 class AgentAdapter(AgentPort):
     """
@@ -286,107 +119,26 @@ class AgentAdapter(AgentPort):
         self._checkpoint_storage = CheckpointStorage(session_store)
 
     def _get_or_create_workflow(self):
-        # Create agents as singletons
+        # Create agents as singletons using custom agent classes
         if AgentAdapter._triage_agent is None:
             triage_client = self._get_chat_client("TriageAgent")
-            AgentAdapter._triage_agent = Agent(
-                id="TriageAgent",
-                name="TriageAgent",
-                client=triage_client,
-                instructions=(
-                    "You are a Triage Agent. Analyze the user's input and delegate it to the appropriate specialist agent:\n"
-                    "- Route to RAGSearchAgent for questions about Bitcoin, Blockchain, or general RAG search.\n"
-                    "- Route to CryptoPricingAgent to get live cryptocurrency prices.\n"
-                    "- Route to OpenZeppelinAgent to develop or write smart contracts.\n"
-                    "If the query is general or does not fit these categories, respond politely yourself."
-                ),
-                require_per_service_call_history_persistence=True
-            )
+            AgentAdapter._triage_agent = TriageAgent(client=triage_client)
 
         if AgentAdapter._rag_search_agent is None:
             rag_client = self._get_chat_client("RAGSearchAgent")
-            if self._settings.mock_mode:
-                search_provider = SimpleMockContextProvider(
-                    index_name=self._settings.azure_search_index_name or "default_mock_index",
-                    top_k=self._settings.azure_search_top_k
-                )
-            else:
-                search_provider = self._search_adapter.build_context_provider()
-                
-            AgentAdapter._rag_search_agent = Agent(
-                id="RAGSearchAgent",
-                name="RAGSearchAgent",
+            search_provider = self._search_adapter.build_context_provider()
+            AgentAdapter._rag_search_agent = RAGSearchAgent(
                 client=rag_client,
-                context_providers=[search_provider],
-                instructions=(
-                    "You are an expert RAG agent. You must answer questions using only "
-                    "the retrieved context from Azure AI Search. Always cite your sources "
-                    "using the [Source: filename] format."
-                ),
-                require_per_service_call_history_persistence=True
+                search_provider=search_provider
             )
 
         if AgentAdapter._crypto_pricing_agent is None:
             crypto_client = self._get_chat_client("CryptoPricingAgent")
-            if self._settings.mock_mode:
-                crypto_tool = FunctionTool(
-                    name="get_crypto_price",
-                    description="Get the live price of a cryptocurrency in USD.",
-                    func=crypto_get_price,
-                    approval_mode="never_require"
-                )
-            else:
-                from agent_framework import MCPStreamableHTTPTool
-                crypto_tool = MCPStreamableHTTPTool(
-                    name="coingecko",
-                    url="https://mcp.api.coingecko.com/mcp",
-                    description="Crypto pricing tool using CoinGecko",
-                    approval_mode="never_require"
-                )
-                
-            AgentAdapter._crypto_pricing_agent = Agent(
-                id="CryptoPricingAgent",
-                name="CryptoPricingAgent",
-                client=crypto_client,
-                tools=[crypto_tool],
-                instructions=(
-                    "You are a Crypto Pricing Agent. Use the coingecko/crypto tool to fetch live "
-                    "prices for requested cryptocurrencies, then report them back to the user."
-                ),
-                require_per_service_call_history_persistence=True
-            )
+            AgentAdapter._crypto_pricing_agent = CryptoPricingAgent(client=crypto_client)
 
         if AgentAdapter._openzeppelin_agent is None:
             openzeppelin_client = self._get_chat_client("OpenZeppelinAgent")
-            if self._settings.mock_mode:
-                oz_tool = FunctionTool(
-                    name="openzeppelin_develop_contract",
-                    description="Develops Solidity smart contracts using OpenZeppelin",
-                    func=openzeppelin_develop_contract,
-                    approval_mode="always_require"
-                )
-            else:
-                from agent_framework import MCPStdioTool
-                oz_tool = MCPStdioTool(
-                    name="openzeppelin",
-                    command="npx",
-                    args=["-y", "@openzeppelin/contracts-mcp"],
-                    description="Develops Solidity smart contracts using OpenZeppelin",
-                    approval_mode="always_require"
-                )
-                
-            AgentAdapter._openzeppelin_agent = Agent(
-                id="OpenZeppelinAgent",
-                name="OpenZeppelinAgent",
-                client=openzeppelin_client,
-                tools=[oz_tool],
-                instructions=(
-                    "You are an OpenZeppelin Agent. Use the openzeppelin tools to develop, write, "
-                    "or customize Solidity contracts. Every time you invoke these tools, human-in-the-loop "
-                    "approval is strictly required."
-                ),
-                require_per_service_call_history_persistence=True
-            )
+            AgentAdapter._openzeppelin_agent = OpenZeppelinAgent(client=openzeppelin_client)
 
         # Always build and return a fresh Handoff Workflow instance to bind to the current asyncio event loop!
         builder = (
@@ -414,28 +166,29 @@ class AgentAdapter(AgentPort):
         return builder.build()
 
     def _get_chat_client(self, agent_name: str):
-        if self._settings.mock_mode:
-            if self._settings.openai_api_key and self._settings.openai_api_key != "mock-key":
-                return OpenAIChatClient(
-                    api_key=self._settings.openai_api_key,
-                    model="gpt-4o-mini"
-                )
-            else:
-                return MockChatClient(agent_name)
-        else:
-            credential = None
-            if not self._settings.mock_mode:
-                from azure.identity.aio import DefaultAzureCredential
-                credential = DefaultAzureCredential()
-            return FoundryChatClient(
-                project_endpoint=self._settings.azure_ai_foundry_endpoint,
-                model=self._settings.azure_ai_model_deployment_name,
-                credential=credential
-            )
+        from azure.identity.aio import DefaultAzureCredential
+        credential = DefaultAzureCredential()
+        return FoundryChatClient(
+            project_endpoint=self._settings.azure_ai_foundry_endpoint,
+            model=self._settings.azure_ai_model_deployment_name,
+            credential=credential
+        )
+
+    async def _ensure_mcp_tools_connected(self):
+        import asyncio
+        for agent in [AgentAdapter._crypto_pricing_agent, AgentAdapter._openzeppelin_agent]:
+            if agent and hasattr(agent, "tools"):
+                for tool in agent.tools:
+                    if hasattr(tool, "connect") and asyncio.iscoroutinefunction(tool.connect):
+                        try:
+                            await tool.connect()
+                        except Exception as e:
+                            logger.warning(f"Could not connect MCP tool '{tool.name}': {e}")
 
     async def run_agent(self, message: str, session: AgentSession) -> AgentRunResult:
         workflow = self._get_or_create_workflow()
         self._checkpoint_storage.active_session = session
+        await self._ensure_mcp_tools_connected()
         
         has_checkpoint = "_workflow_checkpoint" in session.state
         active_req_id = session.state.get("active_user_prompt_request_id")
@@ -481,6 +234,7 @@ class AgentAdapter(AgentPort):
         workflow = self._get_or_create_workflow()
         responses = {request_id: response_content}
         self._checkpoint_storage.active_session = session
+        await self._ensure_mcp_tools_connected()
         
         run_result = await workflow.run(
             responses=responses,
