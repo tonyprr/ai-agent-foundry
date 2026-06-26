@@ -1,6 +1,16 @@
 import logging
 import json
+import time
 from typing import Any
+
+from agent_framework._workflows._events import WorkflowEvent
+
+# Patch WorkflowEvent to record creation timestamp for agent metrics tracking
+_original_workflow_event_init = WorkflowEvent.__init__
+def _patched_workflow_event_init(self, *args, **kwargs):
+    _original_workflow_event_init(self, *args, **kwargs)
+    self.created_at = time.perf_counter()
+WorkflowEvent.__init__ = _patched_workflow_event_init
 
 from agent_framework import (
     AgentSession,
@@ -245,6 +255,82 @@ class AgentAdapter(AgentPort):
         return self._build_run_result(run_result, session)
 
     def _build_run_result(self, run_result: Any, session: AgentSession) -> AgentRunResult:
+        self._log_token_and_time_summary(run_result)
+        
+        response_text = self._extract_response_text(run_result)
+        approval_request = self._extract_approval_request(run_result, session)
+        
+        return AgentRunResult(
+            response_text=response_text,
+            approval_request=approval_request
+        )
+
+    def _log_token_and_time_summary(self, run_result: Any) -> None:
+        """
+        Calculates and logs the token consumption and processing duration per agent.
+        """
+        metrics = {}
+        agent_start_times = {}
+        
+        try:
+            for event in run_result:
+                timestamp = getattr(event, "created_at", None)
+                agent_name = getattr(event, "executor_id", None)
+                if not agent_name:
+                    continue
+                    
+                if agent_name not in metrics:
+                    metrics[agent_name] = {"input": 0, "output": 0, "duration": 0.0}
+                    
+                # Track duration
+                if timestamp is not None:
+                    if event.type == "executor_invoked":
+                        agent_start_times[agent_name] = timestamp
+                    elif event.type in ("executor_completed", "executor_failed", "executor_bypassed"):
+                        start_time = agent_start_times.pop(agent_name, None)
+                        if start_time is not None:
+                            metrics[agent_name]["duration"] += timestamp - start_time
+                            
+                # Track token usage
+                if event.data:
+                    usage = getattr(event.data, "usage_details", None)
+                    if usage:
+                        input_tokens = 0
+                        output_tokens = 0
+                        if isinstance(usage, dict):
+                            input_tokens = usage.get("input_token_count") or 0
+                            output_tokens = usage.get("output_token_count") or 0
+                        else:
+                            input_tokens = getattr(usage, "input_token_count", 0) or 0
+                            output_tokens = getattr(usage, "output_token_count", 0) or 0
+                        
+                        metrics[agent_name]["input"] += input_tokens
+                        metrics[agent_name]["output"] += output_tokens
+        except Exception as e:
+            logger.warning(f"Error calculating token usage or duration: {e}")
+            return
+
+        if metrics:
+            total_input = sum(item["input"] for item in metrics.values())
+            total_output = sum(item["output"] for item in metrics.values())
+            total_duration = sum(item["duration"] for item in metrics.values())
+            
+            log_lines = ["======= Token Usage & Processing Time Summary ======="]
+            for agent, data in metrics.items():
+                log_lines.append(
+                    f"  Agent: {agent} -> Input: {data['input']} | Output: {data['output']} | Total: {data['input'] + data['output']} | Duration: {data['duration']:.2f}s"
+                )
+            log_lines.append(
+                f"  TOTAL -> Input: {total_input} | Output: {total_output} | Total: {total_input + total_output} | Duration: {total_duration:.2f}s"
+            )
+            log_lines.append("=====================================================")
+            
+            logger.info("\n" + "\n".join(log_lines))
+
+    def _extract_response_text(self, run_result: Any) -> str:
+        """
+        Extracts and concatenates the output texts from the workflow run result.
+        """
         outputs = run_result.get_outputs()
         texts = []
         for out in outputs:
@@ -256,11 +342,12 @@ class AgentAdapter(AgentPort):
                 for msg in out.messages:
                     if msg.text:
                         texts.append(msg.text)
-                        
-        response_text = "\n".join(texts)
-        
-        # Check for pending request info events
-        approval_request = None
+        return "\n".join(texts)
+
+    def _extract_approval_request(self, run_result: Any, session: AgentSession) -> ApprovalRequestInfo | None:
+        """
+        Checks for any pending requests or approvals, formats them, and stores necessary session state.
+        """
         final_state = run_result.get_final_state()
         if final_state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
             request_events = run_result.get_request_info_events()
@@ -283,11 +370,7 @@ class AgentAdapter(AgentPort):
                     
                     # Store original request content in session state
                     session.state[f"pending_req_{event.request_id}"] = content.to_dict()
-                    break
+                    return approval_request
                 elif isinstance(event.data, HandoffAgentUserRequest):
                     session.state["active_user_prompt_request_id"] = event.request_id
-                    
-        return AgentRunResult(
-            response_text=response_text,
-            approval_request=approval_request
-        )
+        return None

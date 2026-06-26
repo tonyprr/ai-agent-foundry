@@ -14,7 +14,7 @@ from agent_framework._middleware import ChatMiddlewareLayer
 from agent_framework._tools import FunctionInvocationLayer
 from agent_framework.observability import ChatTelemetryLayer
 from agent_framework import BaseChatClient, ContextProvider, SessionContext
-from agent_framework._types import ChatResponse
+from agent_framework._types import ChatResponse, UsageDetails
 from agent_framework import Message, Content
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,8 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
         return ChatResponse(
             messages=[response_msg],
             finish_reason="tool_calls" if has_func_call else "stop",
-            model=self.model
+            model=self.model,
+            usage_details=UsageDetails(input_token_count=100, output_token_count=50, total_token_count=150)
         )
 
 @pytest.fixture(autouse=True)

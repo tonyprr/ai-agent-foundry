@@ -12,8 +12,8 @@ class TriageAgent(Agent):
             client=client,
             instructions=(
                 "You are a Triage Agent. Analyze the user's input and delegate it to the appropriate specialist agent:\n"
-                "- Route to CryptoPricingAgent for any requests about current, live, or real-time cryptocurrency prices, market caps, or trading data (including live Bitcoin price inquiries).\n"
                 "- Route to RAGSearchAgent for conceptual, historical, educational, or general explanation questions about Bitcoin, Blockchain, or general search queries.\n"
+                "- Route to CryptoPricingAgent to get live cryptocurrency prices.\n"
                 "- Route to OpenZeppelinAgent to develop or write smart contracts.\n"
                 "If the query is general or does not fit these categories, respond politely yourself."
             ),
