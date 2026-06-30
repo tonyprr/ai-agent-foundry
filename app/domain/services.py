@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 from app.ports.inputs import RAGUseCasePort
 from app.ports.outputs import AgentPort, SessionStorePort
-from app.domain.models import RAGQueryRequest, RAGQueryResponse, SearchConfigOverride
+from app.domain.models import RAGQueryRequest, RAGQueryResponse
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -26,17 +26,12 @@ class RAGDomainService(RAGUseCasePort):
     async def process_query(self, request: RAGQueryRequest) -> RAGQueryResponse:
         """
         Main domain business logic flow:
-        1. Validates that search_overrides are not supplied.
-        2. Resolves/generates conversation thread ID.
-        3. Retrieves session context.
-        4. Triggers the multi-agent Handoff Orchestration.
-        5. Saves updated session state.
-        6. Returns RAG response models (including any pending approval request).
+        1. Resolves/generates conversation thread ID.
+        2. Retrieves session context.
+        3. Triggers the multi-agent Handoff Orchestration.
+        4. Saves updated session state.
+        5. Returns RAG response models (including any pending approval request).
         """
-        if request.search_overrides is not None:
-            logger.warning("Rejected request containing search_overrides.")
-            raise ValueError("search_overrides are not permitted in the public API.")
-
         # Resolve or generate a new unique conversation thread ID
         thread_id = request.thread_id or f"thread_{uuid.uuid4().hex[:12]}"
         logger.info(f"Processing query for thread '{thread_id}'")
@@ -55,7 +50,6 @@ class RAGDomainService(RAGUseCasePort):
 
         # 4. Build response metadata showing the configuration details applied
         metadata = {
-            "mock_mode": self._settings.mock_mode,
             "memory_compaction_strategy": self._settings.memory_compaction_strategy
         }
 
@@ -91,7 +85,6 @@ class RAGDomainService(RAGUseCasePort):
         await self._session_store_port.save_session(session)
 
         metadata = {
-            "mock_mode": self._settings.mock_mode,
             "memory_compaction_strategy": self._settings.memory_compaction_strategy
         }
 

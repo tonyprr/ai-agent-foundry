@@ -1,13 +1,4 @@
-import os
-import pytest
 from fastapi.testclient import TestClient
-
-# Ensure test settings are correct
-os.environ["MOCK_MODE"] = "True"
-os.environ["SESSION_STORE_TYPE"] = "memory"
-os.environ["AZURE_SEARCH_VECTOR_FIELD"] = ""
-os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
-
 from app.main import app
 from app.adapters.driven.agent.agent_adapter import AgentAdapter
 
@@ -71,3 +62,24 @@ def test_triage_routing_to_crypto():
         data = response.json()
         assert "response_text" in data
         assert "65,000" in data["response_text"] or "pricing service" in data["response_text"]
+
+
+def test_token_usage_logging(caplog):
+    """
+    Verify that token usage summary is printed as a log.
+    """
+    import logging
+    with caplog.at_level(logging.INFO):
+        with TestClient(app) as client:
+            payload = {
+                "message": "Can you search the blockchain RAG documents?",
+                "thread_id": "thread_token_logging"
+            }
+            response = client.post("/api/v1/chat", json=payload)
+            assert response.status_code == 200
+            
+            # Verify the token usage summary is present in the logged text
+            assert "Token Usage & Processing Time Summary" in caplog.text
+            assert "Agent: TriageAgent" in caplog.text
+            assert "Duration:" in caplog.text
+            assert "TOTAL -> Input:" in caplog.text

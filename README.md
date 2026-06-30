@@ -9,9 +9,8 @@ Retrieval-Augmented Generation (RAG) system built with **FastAPI** and the **Mic
 - **Microsoft Agent Framework (MAF)**: Utilizes MAF's native `Agent` and `FoundryChatClient` architectures for clean orchestration.
 - **Hexagonal Architecture**: Isolates core business domain logic from external dependencies (FastAPI, Azure AI Search, LLM providers).
 - **Asynchronous Execution**: Fully utilizes Python's `asyncio` for non-blocking I/O across search queries, agent execution, and HTTP requests.
-- **Dynamic Search Overrides**: Supports overriding connection parameters (index name, endpoint, api key, search mode, top_k) dynamically on a per-request basis.
 - **Conversation State Persistence**: Manages session history threads asynchronously through a serialized in-memory adapter (designed to be easily swapped for Azure Cosmos DB or Redis).
-- **Offline Mock / Developer Mode**: Includes a local mock execution strategy allowing you to test the API endpoints locally without active Azure credentials.
+- **Automated Test-Level Mocks**: Includes a robust test-level mocking strategy using pytest and monkeypatches, allowing you to run verification tests locally without active Azure credentials or services.
 
 ---
 
@@ -79,6 +78,7 @@ app/
 │   │   └── fastapi_api.py # Driving Adapter (FastAPI controllers/endpoints)
 │   └── driven/
 │       ├── agent/
+│       │   ├── agents/          # Modular specialist agent classes (Triage, RAG, Crypto, OpenZeppelin)
 │       │   └── agent_adapter.py # Driven Adapter implementing AgentPort with MAF
 │       ├── search/
 │       │   └── ai_search_adapter.py # Driven Adapter implementing SearchPort for Azure AI Search
@@ -100,9 +100,6 @@ Ensure you have **Python >=3.10** installed. In this workspace, a virtual enviro
 ### 2. Configure Environment Variables
 Copy the `.env.example` to `.env` (already prepared) and fill in your Azure settings:
 ```ini
-# Toggle mock mode (set to False to connect to real Azure resources)
-MOCK_MODE=True
-
 # Azure AI Foundry Configuration
 AZURE_AI_FOUNDRY_ENDPOINT=https://your-foundry-project.services.ai.azure.com
 AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-4.1-mini-demo
@@ -124,9 +121,9 @@ The application will start on `http://127.0.0.1:8000`. You can access the Swagge
 
 ---
 
-## Dynamic Per-Request Configurations
+## Interacting with the Chat API
 
-You can interact with the RAG agent by making a `POST` request to `/api/v1/chat`. The index connection, retrieval mode, and search limits can be configured dynamically inside `search_overrides`:
+You can interact with the RAG agent by making a `POST` request to `/api/v1/chat`:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/chat \

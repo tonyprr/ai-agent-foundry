@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     
     # 1. Load configurations
     settings = Settings()
-    logger.info(f"Configuration loaded. Mock mode active: {settings.mock_mode}")
+    logger.info("Configuration loaded.")
     logger.info(f"Azure AI Foundry endpoint: {settings.azure_ai_foundry_endpoint}")
     logger.info(f"Azure AI Model Deployment Name: {settings.azure_ai_model_deployment_name}")
     logger.info(f"Azure Search endpoint: {settings.azure_search_endpoint}")

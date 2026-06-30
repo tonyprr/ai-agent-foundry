@@ -1,6 +1,5 @@
 import asyncio
 import os
-os.environ["MOCK_MODE"] = "True"
 os.environ["AZURE_SEARCH_VECTOR_FIELD"] = ""
 os.environ["AZURE_SEARCH_SEMANTIC_CONFIG"] = ""
 
@@ -10,7 +9,7 @@ from app.adapters.driven.search.ai_search_adapter import AISearchAdapter
 from app.adapters.driven.agent.agent_adapter import AgentAdapter
 
 async def main():
-    settings = Settings(mock_mode=True)
+    settings = Settings()
     session_store = InMemorySessionStoreAdapter()
     search_adapter = AISearchAdapter(
         settings=settings
