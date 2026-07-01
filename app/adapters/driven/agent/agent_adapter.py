@@ -1,9 +1,23 @@
-import logging
 import json
+import logging
 import time
 from typing import Any
 
+from typing_extensions import Never
+
+# Microsoft Agent Framework Imports
+from agent_framework import (
+    AgentSession,
+    Case,
+    Content,
+    Default,
+    Message,
+    WorkflowBuilder,
+    WorkflowRunState,
+)
+from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorResponse
 from agent_framework._workflows._events import WorkflowEvent
+from agent_framework.foundry import FoundryChatClient
 
 # Patch WorkflowEvent to record creation timestamp for agent metrics tracking
 _original_workflow_event_init = WorkflowEvent.__init__
@@ -12,104 +26,20 @@ def _patched_workflow_event_init(self, *args, **kwargs):
     self.created_at = time.perf_counter()
 WorkflowEvent.__init__ = _patched_workflow_event_init
 
-from agent_framework import (
-    AgentSession,
-    Message,
-    Content,
-    WorkflowRunState,
-)
-from agent_framework._workflows._checkpoint import CheckpointStorage as BaseCheckpointStorage, WorkflowCheckpoint, CheckpointID
-from agent_framework._workflows._checkpoint_encoding import encode_checkpoint_value, decode_checkpoint_value
-from agent_framework.exceptions import WorkflowCheckpointException
-from agent_framework_orchestrations import HandoffBuilder
-from agent_framework_orchestrations._handoff import HandoffAgentUserRequest
-from agent_framework.foundry import FoundryChatClient
-
-from app.ports.outputs import AgentPort, SessionStorePort, SearchPort
-from app.domain.models import ApprovalRequestInfo, AgentRunResult
+# Local Application Imports
 from app.config import Settings
+from app.domain.models import AgentRunResult, ApprovalRequestInfo
+from app.ports.outputs import AgentPort, SearchPort, SessionStorePort
 from app.adapters.driven.agent.agents import (
-    TriageAgent,
-    RAGSearchAgent,
     CryptoPricingAgent,
     OpenZeppelinAgent,
+    RAGSearchAgent,
+    SummarizerAgent,
+    TriageAgent,
 )
+from app.adapters.driven.agent.workflow_support import CheckpointStorage, Finalizer, Router
 
 logger = logging.getLogger(__name__)
-
-class CheckpointStorage(BaseCheckpointStorage):
-    """
-    CheckpointStorage implementation that persists workflow checkpoints inside
-    the AgentSession managed by SessionStorePort.
-    """
-    def __init__(self, session_store: SessionStorePort):
-        self._session_store = session_store
-        self.active_session = None
-
-    async def save(self, checkpoint: WorkflowCheckpoint) -> CheckpointID:
-        session_id = self.active_session.session_id if self.active_session else checkpoint.checkpoint_id
-        try:
-            object.__setattr__(checkpoint, "checkpoint_id", session_id)
-        except Exception as e:
-            logger.warning(f"Could not override checkpoint_id: {e}")
-            
-        session = self.active_session
-        if not session:
-            session = await self._session_store.get_or_create_session(session_id)
-            
-        checkpoint_dict = checkpoint.to_dict()
-        encoded = encode_checkpoint_value(checkpoint_dict)
-        session.state["_workflow_checkpoint"] = encoded
-        await self._session_store.save_session(session)
-        return session_id
-
-    async def load(self, checkpoint_id: CheckpointID) -> WorkflowCheckpoint:
-        session = self.active_session
-        if not session or session.session_id != checkpoint_id:
-            session = await self._session_store.get_or_create_session(checkpoint_id)
-        encoded = session.state.get("_workflow_checkpoint")
-        if not encoded:
-            raise WorkflowCheckpointException(f"No checkpoint found with ID {checkpoint_id}")
-            
-        decoded = decode_checkpoint_value(encoded)
-        return WorkflowCheckpoint.from_dict(decoded)
-
-    async def list_checkpoints(self, *, workflow_name: str) -> list[WorkflowCheckpoint]:
-        if self.active_session:
-            encoded = self.active_session.state.get("_workflow_checkpoint")
-            if encoded:
-                try:
-                    decoded = decode_checkpoint_value(encoded)
-                    return [WorkflowCheckpoint.from_dict(decoded)]
-                except Exception:
-                    pass
-        return []
-
-    async def delete(self, checkpoint_id: CheckpointID) -> bool:
-        session = self.active_session
-        if not session or session.session_id != checkpoint_id:
-            session = await self._session_store.get_or_create_session(checkpoint_id)
-        if "_workflow_checkpoint" in session.state:
-            del session.state["_workflow_checkpoint"]
-            await self._session_store.save_session(session)
-            return True
-        return False
-
-    async def get_latest(self, *, workflow_name: str) -> WorkflowCheckpoint | None:
-        if self.active_session:
-            encoded = self.active_session.state.get("_workflow_checkpoint")
-            if encoded:
-                try:
-                    decoded = decode_checkpoint_value(encoded)
-                    return WorkflowCheckpoint.from_dict(decoded)
-                except Exception:
-                    pass
-        return None
-
-    async def list_checkpoint_ids(self, *, workflow_name: str) -> list[CheckpointID]:
-        if self.active_session and "_workflow_checkpoint" in self.active_session.state:
-            return [self.active_session.session_id]
-        return []
 
 
 class AgentAdapter(AgentPort):
@@ -121,14 +51,19 @@ class AgentAdapter(AgentPort):
     _rag_search_agent = None
     _crypto_pricing_agent = None
     _openzeppelin_agent = None
+    _summarizer_agent = None
 
     def __init__(self, settings: Settings, search_adapter: SearchPort, session_store: SessionStorePort):
         self._settings = settings
         self._search_adapter = search_adapter
         self._session_store = session_store
         self._checkpoint_storage = CheckpointStorage(session_store)
+        self._workflow = None
 
     def _get_or_create_workflow(self):
+        if self._workflow is not None:
+            return self._workflow
+
         # Create agents as singletons using custom agent classes
         if AgentAdapter._triage_agent is None:
             triage_client = self._get_chat_client("TriageAgent")
@@ -150,30 +85,61 @@ class AgentAdapter(AgentPort):
             openzeppelin_client = self._get_chat_client("OpenZeppelinAgent")
             AgentAdapter._openzeppelin_agent = OpenZeppelinAgent(client=openzeppelin_client)
 
-        # Always build and return a fresh Handoff Workflow instance to bind to the current asyncio event loop!
+        if AgentAdapter._summarizer_agent is None:
+            summarizer_client = self._get_chat_client("SummarizerAgent")
+            AgentAdapter._summarizer_agent = SummarizerAgent(client=summarizer_client)
+
+        def clean_history(messages: list[Message]) -> list[Message]:
+            cleaned = []
+            for msg in messages:
+                if msg.role == "tool":
+                    continue
+                clean_contents = [
+                    c for c in msg.contents
+                    if c.type not in ("function_call", "function_result", "function_approval_request", "function_approval_response")
+                ]
+                if clean_contents:
+                    cleaned.append(Message(role=msg.role, contents=clean_contents, author_name=getattr(msg, "author_name", None)))
+            return cleaned
+
+        # Build and cache a Workflow instance to bind to the current asyncio event loop
+        triage_exec = AgentExecutor(AgentAdapter._triage_agent, id="TriageAgent", context_mode="custom", context_filter=clean_history)
+        rag_exec = AgentExecutor(AgentAdapter._rag_search_agent, id="RAGSearchAgent", context_mode="custom", context_filter=clean_history)
+        crypto_exec = AgentExecutor(AgentAdapter._crypto_pricing_agent, id="CryptoPricingAgent", context_mode="custom", context_filter=clean_history)
+        oz_exec = AgentExecutor(AgentAdapter._openzeppelin_agent, id="OpenZeppelinAgent", context_mode="custom", context_filter=clean_history)
+        summarizer_exec = AgentExecutor(AgentAdapter._summarizer_agent, id="SummarizerAgent", context_mode="custom", context_filter=clean_history)
+
+        
+        router = Router()
+        finalizer = Finalizer()
+
         builder = (
-            HandoffBuilder(
+            WorkflowBuilder(
                 name="MultiAgentOrchestrationWorkflow",
-                participants=[
-                    AgentAdapter._triage_agent,
-                    AgentAdapter._rag_search_agent,
-                    AgentAdapter._crypto_pricing_agent,
-                    AgentAdapter._openzeppelin_agent
+                start_executor=triage_exec,
+                checkpoint_storage=self._checkpoint_storage,
+                output_from=[finalizer]
+            )
+            .add_edge(triage_exec, router)
+            .add_switch_case_edge_group(
+                router,
+                [
+                    Case(condition=lambda r: getattr(r, "route_to", "") == "RAGSearchAgent", target=rag_exec),
+                    Case(condition=lambda r: getattr(r, "route_to", "") == "CryptoPricingAgent", target=crypto_exec),
+                    Case(condition=lambda r: getattr(r, "route_to", "") == "OpenZeppelinAgent", target=oz_exec),
+                    Case(condition=lambda r: getattr(r, "route_to", "") == "SummarizerAgent", target=summarizer_exec),
+                    Default(target=finalizer)
                 ]
             )
-            .with_checkpointing(self._checkpoint_storage)
-            .with_start_agent(AgentAdapter._triage_agent)
-            .add_handoff(AgentAdapter._triage_agent, [
-                AgentAdapter._rag_search_agent,
-                AgentAdapter._crypto_pricing_agent,
-                AgentAdapter._openzeppelin_agent
-            ])
-            .add_handoff(AgentAdapter._rag_search_agent, [AgentAdapter._triage_agent])
-            .add_handoff(AgentAdapter._crypto_pricing_agent, [AgentAdapter._triage_agent])
-            .add_handoff(AgentAdapter._openzeppelin_agent, [AgentAdapter._triage_agent])
+            .add_edge(rag_exec, router)
+            .add_edge(crypto_exec, router)
+            .add_edge(oz_exec, router)
+            .add_edge(summarizer_exec, router)
+            .add_edge(finalizer, triage_exec)
         )
         
-        return builder.build()
+        self._workflow = builder.build()
+        return self._workflow
 
     def _get_chat_client(self, agent_name: str):
         from azure.identity.aio import DefaultAzureCredential
@@ -196,7 +162,9 @@ class AgentAdapter(AgentPort):
                             logger.warning(f"Could not connect MCP tool '{tool.name}': {e}")
 
     async def run_agent(self, message: str, session: AgentSession) -> AgentRunResult:
-        workflow = self._get_or_create_workflow()
+        if self._workflow is None:
+            self._get_or_create_workflow()
+        workflow = self._workflow
         self._checkpoint_storage.active_session = session
         await self._ensure_mcp_tools_connected()
         
@@ -218,9 +186,9 @@ class AgentAdapter(AgentPort):
                     checkpoint_storage=self._checkpoint_storage
                 )
             else:
+                # Stale checkpoint found but no active user request. Start a fresh run.
                 run_result = await workflow.run(
                     message=message,
-                    checkpoint_id=session.session_id,
                     checkpoint_storage=self._checkpoint_storage
                 )
         else:
@@ -248,7 +216,9 @@ class AgentAdapter(AgentPort):
         del session.state[req_key]
         await self._session_store.save_session(session)
         
-        workflow = self._get_or_create_workflow()
+        if self._workflow is None:
+            self._get_or_create_workflow()
+        workflow = self._workflow
         responses = {request_id: response_content}
         self._checkpoint_storage.active_session = session
         await self._ensure_mcp_tools_connected()
@@ -276,19 +246,68 @@ class AgentAdapter(AgentPort):
         """
         Calculates and logs the token consumption and processing duration per agent.
         """
+        AGENT_EXECUTOR_IDS = {
+            "TriageAgent",
+            "RAGSearchAgent",
+            "CryptoPricingAgent",
+            "OpenZeppelinAgent",
+            "SummarizerAgent",
+        }
+        
         metrics = {}
         agent_start_times = {}
         
+        def extract_usages_from_completed_event_data(data) -> list[Any]:
+            if not data:
+                return []
+            
+            if isinstance(data, (list, tuple)):
+                agent_responses = []
+                executor_responses = []
+                for item in data:
+                    class_name = item.__class__.__name__
+                    if class_name == "AgentResponse" or hasattr(item, "usage_details"):
+                        agent_responses.append(item)
+                    elif class_name == "AgentExecutorResponse" or hasattr(item, "agent_response"):
+                        executor_responses.append(item)
+                
+                usages = []
+                if agent_responses:
+                    for resp in agent_responses:
+                        usage = getattr(resp, "usage_details", None)
+                        if usage:
+                            usages.append(usage)
+                else:
+                    for exec_resp in executor_responses:
+                        agent_resp = getattr(exec_resp, "agent_response", None)
+                        if agent_resp:
+                            usage = getattr(agent_resp, "usage_details", None)
+                            if usage:
+                                usages.append(usage)
+                return usages
+            else:
+                class_name = data.__class__.__name__
+                if class_name == "AgentResponse" or hasattr(data, "usage_details"):
+                    usage = getattr(data, "usage_details", None)
+                    return [usage] if usage else []
+                elif class_name == "AgentExecutorResponse" or hasattr(data, "agent_response"):
+                    agent_resp = getattr(data, "agent_response", None)
+                    if agent_resp:
+                        usage = getattr(agent_resp, "usage_details", None)
+                        return [usage] if usage else []
+                return []
+
         try:
             for event in run_result:
-                timestamp = getattr(event, "created_at", None)
                 agent_name = getattr(event, "executor_id", None)
-                if not agent_name:
+                if not agent_name or agent_name not in AGENT_EXECUTOR_IDS:
                     continue
                     
                 if agent_name not in metrics:
                     metrics[agent_name] = {"input": 0, "output": 0, "duration": 0.0}
                     
+                timestamp = getattr(event, "created_at", None)
+                
                 # Track duration
                 if timestamp is not None:
                     if event.type == "executor_invoked":
@@ -299,9 +318,9 @@ class AgentAdapter(AgentPort):
                             metrics[agent_name]["duration"] += timestamp - start_time
                             
                 # Track token usage
-                if event.data:
-                    usage = getattr(event.data, "usage_details", None)
-                    if usage:
+                if event.type == "executor_completed" and event.data:
+                    usages = extract_usages_from_completed_event_data(event.data)
+                    for usage in usages:
                         input_tokens = 0
                         output_tokens = 0
                         if isinstance(usage, dict):
@@ -374,10 +393,7 @@ class AgentAdapter(AgentPort):
                         tool_name=fn_call.name,
                         arguments=args
                     )
-                    
                     # Store original request content in session state
                     session.state[f"pending_req_{event.request_id}"] = content.to_dict()
                     return approval_request
-                elif isinstance(event.data, HandoffAgentUserRequest):
-                    session.state["active_user_prompt_request_id"] = event.request_id
         return None

@@ -66,56 +66,31 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
         reply_contents = []
         
         if self.agent_name == "TriageAgent":
+            needed = []
             if "solidity" in last_msg_lower or "contract" in last_msg_lower or "openzeppelin" in last_msg_lower:
-                reply_contents.append("Routing to OpenZeppelinAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_OpenZeppelinAgent",
-                    arguments={},
-                    call_id=f"triage_{uuid.uuid4().hex[:8]}"
-                ))
-            elif "price" in last_msg_lower or "pricing" in last_msg_lower or "coingecko" in last_msg_lower:
-                reply_contents.append("Routing to CryptoPricingAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_CryptoPricingAgent",
-                    arguments={},
-                    call_id=f"triage_{uuid.uuid4().hex[:8]}"
-                ))
-            elif "bitcoin" in last_msg_lower or "blockchain" in last_msg_lower:
-                reply_contents.append("Routing to RAGSearchAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_RAGSearchAgent",
-                    arguments={},
-                    call_id=f"triage_{uuid.uuid4().hex[:8]}"
-                ))
+                needed.append("OpenZeppelinAgent")
+            if "price" in last_msg_lower or "pricing" in last_msg_lower or "coingecko" in last_msg_lower:
+                needed.append("CryptoPricingAgent")
+            if "bitcoin" in last_msg_lower or "blockchain" in last_msg_lower or "search" in last_msg_lower:
+                if "search" in last_msg_lower or "blockchain" in last_msg_lower or "document" in last_msg_lower or "explain" in last_msg_lower or "concept" in last_msg_lower or "what is" in last_msg_lower or "price" not in last_msg_lower:
+                    needed.append("RAGSearchAgent")
+            
+            if needed:
+                reply_contents.append(f"Routing to: {', '.join(needed)}")
             else:
                 reply_contents.append(
                     "Hello! I am the Triage Agent. I can route you to: RAG Search, Crypto Pricing, or OpenZeppelin Solidity agents. What do you need?"
                 )
                 
         elif self.agent_name == "RAGSearchAgent":
-            if any(k in last_msg_lower for k in ["price", "pricing", "coingecko", "solidity", "contract", "openzeppelin"]):
-                reply_contents.append("Handing off to TriageAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_TriageAgent",
-                    arguments={},
-                    call_id=f"rag_handoff_{uuid.uuid4().hex[:8]}"
-                ))
-            else:
-                reply_contents.append(
-                    "[Source: Document_1.txt]\n"
-                    "Microsoft Agent Framework (MAF) is a professional, multi-agent orchestration framework. "
-                    "Bitcoin is a decentralized digital currency."
-                )
+            reply_contents.append(
+                "[Source: Document_1.txt]\n"
+                "Microsoft Agent Framework (MAF) is a professional, multi-agent orchestration framework. "
+                "Bitcoin is a decentralized digital currency."
+            )
             
         elif self.agent_name == "CryptoPricingAgent":
-            if not any(k in last_msg_lower for k in ["price", "pricing", "coingecko"]):
-                reply_contents.append("Handing off to TriageAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_TriageAgent",
-                    arguments={},
-                    call_id=f"crypto_handoff_{uuid.uuid4().hex[:8]}"
-                ))
-            elif tool_result:
+            if tool_result:
                 res_val = tool_result.result if hasattr(tool_result, "result") else ""
                 reply_contents.append(f"[MOCK RESPONSE] Based on the pricing service: {res_val}")
             else:
@@ -126,14 +101,7 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                 ))
                 
         elif self.agent_name == "OpenZeppelinAgent":
-            if not any(k in last_msg_lower for k in ["solidity", "contract", "openzeppelin"]):
-                reply_contents.append("Handing off to TriageAgent...")
-                reply_contents.append(Content.from_function_call(
-                    name="handoff_to_TriageAgent",
-                    arguments={},
-                    call_id=f"openzeppelin_handoff_{uuid.uuid4().hex[:8]}"
-                ))
-            elif tool_result:
+            if tool_result:
                 contract_code = tool_result.result if hasattr(tool_result, "result") else ""
                 reply_contents.append(
                     f"Here is your Solidity contract:\n{contract_code}"
@@ -144,6 +112,31 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                     arguments={"contract_type": "ERC20"},
                     call_id=f"openzeppelin_{uuid.uuid4().hex[:8]}"
                 ))
+
+        elif self.agent_name == "SummarizerAgent":
+            rag_res = ""
+            crypto_res = ""
+            oz_res = ""
+            for m in messages:
+                author = getattr(m, "author_name", None)
+                if author == "RAGSearchAgent":
+                    rag_res = m.text
+                elif author == "CryptoPricingAgent":
+                    crypto_res = m.text
+                elif author == "OpenZeppelinAgent":
+                    oz_res = m.text
+
+            bullets = []
+            if rag_res:
+                bullets.append(f"- Search results: {rag_res.replace(chr(10), ' ')}")
+            if crypto_res:
+                bullets.append(f"- Crypto price: {crypto_res.replace(chr(10), ' ')}")
+            if oz_res:
+                bullets.append(f"- Contract code: {oz_res.replace(chr(10), ' ')}")
+
+            reply_contents.append(
+                "Here is a bullet summary of the answers:\n" + "\n".join(bullets)
+            )
                 
         msg_contents = []
         has_func_call = False
@@ -174,6 +167,7 @@ def mock_agent_adapters_and_clients(monkeypatch):
     from app.adapters.driven.agent.agent_adapter import AgentAdapter
     from app.adapters.driven.agent.agents.crypto_pricing_agent import CryptoPricingAgent
     from app.adapters.driven.agent.agents.openzeppelin_agent import OpenZeppelinAgent
+    from app.adapters.driven.agent.agents.summarizer_agent import SummarizerAgent
     from agent_framework import FunctionTool
 
     # 1. Patch search adapter to return SimpleMockContextProvider
@@ -219,9 +213,7 @@ def mock_agent_adapters_and_clients(monkeypatch):
             tools=[crypto_tool],
             instructions=(
                 "You are a Crypto Pricing Agent. Use the coingecko/crypto tool to fetch live "
-                "prices for requested cryptocurrencies, then report them back to the user.\n"
-                "If the user's query is outside your scope, you MUST delegate/route the conversation "
-                "back to the TriageAgent by calling the handoff_to_TriageAgent tool."
+                "prices for requested cryptocurrencies, then report them back to the user."
             ),
             require_per_service_call_history_persistence=True
         )
@@ -243,12 +235,24 @@ def mock_agent_adapters_and_clients(monkeypatch):
             instructions=(
                 "You are an OpenZeppelin Agent. Use the openzeppelin tools to develop, write, "
                 "or customize Solidity contracts. Every time you invoke these tools, human-in-the-loop "
-                "approval is strictly required.\n"
-                "If the user's query is outside your scope, you MUST delegate/route the conversation "
-                "back to the TriageAgent by calling the handoff_to_TriageAgent tool."
+                "approval is strictly required."
+            ),
+            require_per_service_call_history_persistence=True
+        )
+
+    def mock_summarizer_init(self, client):
+        from agent_framework import Agent
+        Agent.__init__(
+            self,
+            id="SummarizerAgent",
+            name="SummarizerAgent",
+            client=client,
+            instructions=(
+                "You are a Summarizer Agent."
             ),
             require_per_service_call_history_persistence=True
         )
 
     monkeypatch.setattr(CryptoPricingAgent, "__init__", mock_crypto_init)
     monkeypatch.setattr(OpenZeppelinAgent, "__init__", mock_oz_init)
+    monkeypatch.setattr(SummarizerAgent, "__init__", mock_summarizer_init)

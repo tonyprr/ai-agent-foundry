@@ -18,11 +18,13 @@ def test_singleton_agents():
         rag1 = AgentAdapter._rag_search_agent
         crypto1 = AgentAdapter._crypto_pricing_agent
         oz1 = AgentAdapter._openzeppelin_agent
+        summarizer1 = AgentAdapter._summarizer_agent
         
         assert triage1 is not None
         assert rag1 is not None
         assert crypto1 is not None
         assert oz1 is not None
+        assert summarizer1 is not None
         
         # Build again to prove singleton instance equality
         agent_port._get_or_create_workflow()
@@ -30,6 +32,7 @@ def test_singleton_agents():
         assert AgentAdapter._rag_search_agent is rag1
         assert AgentAdapter._crypto_pricing_agent is crypto1
         assert AgentAdapter._openzeppelin_agent is oz1
+        assert AgentAdapter._summarizer_agent is summarizer1
 
 
 def test_triage_routing_to_rag():
@@ -125,4 +128,29 @@ def test_multiturn_handoff_routing():
         data3 = response3.json()
         assert "response_text" in data3
         assert "Microsoft Agent Framework" in data3["response_text"]
+
+
+def test_single_turn_multi_intent_routing():
+    """
+    Test that a multi-intent query in a single turn executes both specialist
+    agents (RAG search and crypto pricing) sequentially and ends at the Triage agent.
+    """
+    with TestClient(app) as client:
+        payload = {
+            "message": "Can you search the blockchain RAG documents and also tell me the current price of Bitcoin?",
+            "thread_id": "thread_single_turn_multi_intent"
+        }
+        response = client.post("/api/v1/chat", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert "response_text" in data
+        
+        # Verify both specialist agent responses are compiled in the final output
+        response_text = data["response_text"]
+        assert "Microsoft Agent Framework" in response_text or "decentralized digital currency" in response_text
+        assert "65,000" in response_text or "pricing service" in response_text
+        assert "bullet summary" in response_text.lower()
+        assert "- Search results:" in response_text
+        assert "- Crypto price:" in response_text
+
 

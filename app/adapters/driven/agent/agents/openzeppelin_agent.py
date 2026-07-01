@@ -21,11 +21,7 @@ class OpenZeppelinAgent(Agent):
             instructions=(
                 "You are an OpenZeppelin Agent. Use the openzeppelin tools to develop, write, "
                 "or customize Solidity contracts. Every time you invoke these tools, human-in-the-loop "
-                "approval is strictly required.\n"
-                "If the user's query is outside your scope (e.g., asking for live crypto prices, "
-                "general search/RAG queries, or general greeting/triage queries), "
-                "you MUST delegate/route the conversation back to the TriageAgent by calling the "
-                "handoff_to_TriageAgent tool."
+                "approval is strictly required."
             ),
             require_per_service_call_history_persistence=True
         )

@@ -27,11 +27,7 @@ class CryptoPricingAgent(Agent):
                 "  return await client.simple.price.get({ vs_currencies: 'usd', ids: 'bitcoin' });\n"
                 "}\n"
                 "```\n"
-                "Execute the code, extract the live price from the returned response, and report it back to the user.\n"
-                "If the user's query is outside your scope (e.g., general search/RAG queries, "
-                "developing Solidity smart contracts, or general greeting/triage queries), "
-                "you MUST delegate/route the conversation back to the TriageAgent by calling the "
-                "handoff_to_TriageAgent tool."
+                "Execute the code, extract the live price from the returned response, and report it back to the user."
             ),
             require_per_service_call_history_persistence=True
         )
