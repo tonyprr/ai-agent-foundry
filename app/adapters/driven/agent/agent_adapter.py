@@ -159,9 +159,9 @@ class AgentAdapter(AgentPort):
                     AgentAdapter._rag_search_agent,
                     AgentAdapter._crypto_pricing_agent,
                     AgentAdapter._openzeppelin_agent
-                ],
-                checkpoint_storage=self._checkpoint_storage
+                ]
             )
+            .with_checkpointing(self._checkpoint_storage)
             .with_start_agent(AgentAdapter._triage_agent)
             .add_handoff(AgentAdapter._triage_agent, [
                 AgentAdapter._rag_search_agent,
@@ -203,19 +203,26 @@ class AgentAdapter(AgentPort):
         has_checkpoint = "_workflow_checkpoint" in session.state
         active_req_id = session.state.get("active_user_prompt_request_id")
         
-        if has_checkpoint and active_req_id:
-            responses = {
-                active_req_id: [Message(role="user", contents=[message])]
-            }
-            # Clean up the active request ID as we are fulfilling it
-            del session.state["active_user_prompt_request_id"]
-            await self._session_store.save_session(session)
-            
-            run_result = await workflow.run(
-                responses=responses,
-                checkpoint_id=session.session_id,
-                checkpoint_storage=self._checkpoint_storage
-            )
+        if has_checkpoint:
+            if active_req_id:
+                responses = {
+                    active_req_id: [Message(role="user", contents=[message])]
+                }
+                # Clean up the active request ID as we are fulfilling it
+                del session.state["active_user_prompt_request_id"]
+                await self._session_store.save_session(session)
+                
+                run_result = await workflow.run(
+                    responses=responses,
+                    checkpoint_id=session.session_id,
+                    checkpoint_storage=self._checkpoint_storage
+                )
+            else:
+                run_result = await workflow.run(
+                    message=message,
+                    checkpoint_id=session.session_id,
+                    checkpoint_storage=self._checkpoint_storage
+                )
         else:
             run_result = await workflow.run(
                 message=message,

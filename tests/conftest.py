@@ -93,14 +93,29 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                 )
                 
         elif self.agent_name == "RAGSearchAgent":
-            reply_contents.append(
-                "[Source: Document_1.txt]\n"
-                "Microsoft Agent Framework (MAF) is a professional, multi-agent orchestration framework. "
-                "Bitcoin is a decentralized digital currency."
-            )
+            if any(k in last_msg_lower for k in ["price", "pricing", "coingecko", "solidity", "contract", "openzeppelin"]):
+                reply_contents.append("Handing off to TriageAgent...")
+                reply_contents.append(Content.from_function_call(
+                    name="handoff_to_TriageAgent",
+                    arguments={},
+                    call_id=f"rag_handoff_{uuid.uuid4().hex[:8]}"
+                ))
+            else:
+                reply_contents.append(
+                    "[Source: Document_1.txt]\n"
+                    "Microsoft Agent Framework (MAF) is a professional, multi-agent orchestration framework. "
+                    "Bitcoin is a decentralized digital currency."
+                )
             
         elif self.agent_name == "CryptoPricingAgent":
-            if tool_result:
+            if not any(k in last_msg_lower for k in ["price", "pricing", "coingecko"]):
+                reply_contents.append("Handing off to TriageAgent...")
+                reply_contents.append(Content.from_function_call(
+                    name="handoff_to_TriageAgent",
+                    arguments={},
+                    call_id=f"crypto_handoff_{uuid.uuid4().hex[:8]}"
+                ))
+            elif tool_result:
                 res_val = tool_result.result if hasattr(tool_result, "result") else ""
                 reply_contents.append(f"[MOCK RESPONSE] Based on the pricing service: {res_val}")
             else:
@@ -111,7 +126,14 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                 ))
                 
         elif self.agent_name == "OpenZeppelinAgent":
-            if tool_result:
+            if not any(k in last_msg_lower for k in ["solidity", "contract", "openzeppelin"]):
+                reply_contents.append("Handing off to TriageAgent...")
+                reply_contents.append(Content.from_function_call(
+                    name="handoff_to_TriageAgent",
+                    arguments={},
+                    call_id=f"openzeppelin_handoff_{uuid.uuid4().hex[:8]}"
+                ))
+            elif tool_result:
                 contract_code = tool_result.result if hasattr(tool_result, "result") else ""
                 reply_contents.append(
                     f"Here is your Solidity contract:\n{contract_code}"
@@ -197,7 +219,9 @@ def mock_agent_adapters_and_clients(monkeypatch):
             tools=[crypto_tool],
             instructions=(
                 "You are a Crypto Pricing Agent. Use the coingecko/crypto tool to fetch live "
-                "prices for requested cryptocurrencies, then report them back to the user."
+                "prices for requested cryptocurrencies, then report them back to the user.\n"
+                "If the user's query is outside your scope, you MUST delegate/route the conversation "
+                "back to the TriageAgent by calling the handoff_to_TriageAgent tool."
             ),
             require_per_service_call_history_persistence=True
         )
@@ -219,7 +243,9 @@ def mock_agent_adapters_and_clients(monkeypatch):
             instructions=(
                 "You are an OpenZeppelin Agent. Use the openzeppelin tools to develop, write, "
                 "or customize Solidity contracts. Every time you invoke these tools, human-in-the-loop "
-                "approval is strictly required."
+                "approval is strictly required.\n"
+                "If the user's query is outside your scope, you MUST delegate/route the conversation "
+                "back to the TriageAgent by calling the handoff_to_TriageAgent tool."
             ),
             require_per_service_call_history_persistence=True
         )

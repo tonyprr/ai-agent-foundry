@@ -83,3 +83,46 @@ def test_token_usage_logging(caplog):
             assert "Agent: TriageAgent" in caplog.text
             assert "Duration:" in caplog.text
             assert "TOTAL -> Input:" in caplog.text
+
+
+def test_multiturn_handoff_routing():
+    """
+    Test multi-turn routing where subsequent queries are correctly routed
+    between different specialist agents via Triage Agent handoffs.
+    """
+    with TestClient(app) as client:
+        thread_id = "thread_multiturn_handoff"
+        
+        # Turn 1: Query for RAG
+        payload1 = {
+            "message": "Can you search the blockchain RAG documents?",
+            "thread_id": thread_id
+        }
+        response1 = client.post("/api/v1/chat", json=payload1)
+        assert response1.status_code == 200
+        data1 = response1.json()
+        assert "response_text" in data1
+        assert "Microsoft Agent Framework" in data1["response_text"]
+        
+        # Turn 2: Query for Crypto pricing (should route back to Triage, then to CryptoPricingAgent)
+        payload2 = {
+            "message": "What is the price of Bitcoin?",
+            "thread_id": thread_id
+        }
+        response2 = client.post("/api/v1/chat", json=payload2)
+        assert response2.status_code == 200
+        data2 = response2.json()
+        assert "response_text" in data2
+        assert "65,000" in data2["response_text"] or "pricing service" in data2["response_text"]
+        
+        # Turn 3: Query for RAG again (should route back to Triage, then to RAGSearchAgent)
+        payload3 = {
+            "message": "Search the blockchain documents once more.",
+            "thread_id": thread_id
+        }
+        response3 = client.post("/api/v1/chat", json=payload3)
+        assert response3.status_code == 200
+        data3 = response3.json()
+        assert "response_text" in data3
+        assert "Microsoft Agent Framework" in data3["response_text"]
+
