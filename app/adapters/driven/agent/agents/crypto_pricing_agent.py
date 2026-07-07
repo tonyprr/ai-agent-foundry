@@ -1,4 +1,15 @@
-from agent_framework import Agent, MCPStreamableHTTPTool
+from agent_framework import Agent, MCPStreamableHTTPTool, FunctionTool
+
+
+def calculate_crypto_purchase(usd_amount: float, crypto_price: float) -> str:
+    """
+    Calculate the amount of cryptocurrency that can be purchased with a given amount of USD based on the current price.
+    """
+    if crypto_price <= 0:
+        return "Error: Crypto price must be greater than zero."
+    amount = usd_amount / crypto_price
+    return f"With {usd_amount} USD, you can buy approximately {amount:.8f} units of the cryptocurrency at the price of {crypto_price} USD."
+
 
 class CryptoPricingAgent(Agent):
     """
@@ -11,11 +22,17 @@ class CryptoPricingAgent(Agent):
             description="Crypto pricing tool using CoinGecko",
             approval_mode="never_require"
         )
+        calculation_tool = FunctionTool(
+            name="calculate_crypto_purchase",
+            description="Calculate the amount of cryptocurrency that can be purchased with a given amount of USD based on the current price.",
+            func=calculate_crypto_purchase,
+            approval_mode="never_require"
+        )
         super().__init__(
             id="CryptoPricingAgent",
             name="CryptoPricingAgent",
             client=client,
-            tools=[crypto_tool],
+            tools=[crypto_tool, calculation_tool],
             instructions=(
                 "You are a Crypto Pricing Agent. You have access to a coingecko MCP tool with two functions:\n"
                 "- `search_docs`: Use this to look up SDK methods and parameters if you need to know how to query the CoinGecko API.\n"
@@ -27,7 +44,11 @@ class CryptoPricingAgent(Agent):
                 "  return await client.simple.price.get({ vs_currencies: 'usd', ids: 'bitcoin' });\n"
                 "}\n"
                 "```\n"
-                "Execute the code, extract the live price from the returned response, and report it back to the user."
+                "Execute the code, extract the live price from the returned response, and report it back to the user.\n\n"
+                "If the user explicitly requests to calculate how much cryptocurrency they can purchase with a given amount of USD, you must:\n"
+                "1. Fetch the live price of the requested cryptocurrency in USD first using the coingecko MCP tool.\n"
+                "2. Call the `calculate_crypto_purchase` tool with the USD amount and the fetched cryptocurrency price to compute the purchase amount."
             ),
             require_per_service_call_history_persistence=True
         )
+
