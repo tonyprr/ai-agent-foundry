@@ -52,27 +52,33 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                 break
         last_msg_lower = last_msg.lower() if last_msg else ""
         
-        # Extract if there is any tool result in the messages
-        tool_result = None
-        for m in reversed(messages):
-            if m.role == "tool" or m.role == "assistant":
+        # Find all assistant function calls and their results
+        calls = {}  # call_id -> name
+        results = {}  # call_id -> result_text
+        for m in messages:
+            if m.role == "assistant":
+                for c in m.contents:
+                    if c.type == "function_call":
+                        calls[c.call_id] = c.name
+            elif m.role == "tool":
                 for c in m.contents:
                     if c.type == "function_result":
-                        tool_result = c
-                        break
-                if tool_result:
-                    break
+                        results[c.call_id] = c.result if hasattr(c, "result") else str(c)
+
+        has_price_result = any(calls.get(cid) == "get_crypto_price" for cid in results)
+        has_calc_result = any(calls.get(cid) == "calculate_crypto_purchase" for cid in results)
 
         reply_contents = []
         
         if self.agent_name == "TriageAgent":
             needed = []
+            is_purchase_calc = any(k in last_msg_lower for k in ("buy", "calculate", "purchase", "how many"))
             if "solidity" in last_msg_lower or "contract" in last_msg_lower or "openzeppelin" in last_msg_lower:
                 needed.append("OpenZeppelinAgent")
-            if "price" in last_msg_lower or "pricing" in last_msg_lower or "coingecko" in last_msg_lower:
+            if "price" in last_msg_lower or "pricing" in last_msg_lower or "coingecko" in last_msg_lower or is_purchase_calc:
                 needed.append("CryptoPricingAgent")
             if "bitcoin" in last_msg_lower or "blockchain" in last_msg_lower or "search" in last_msg_lower:
-                if "search" in last_msg_lower or "blockchain" in last_msg_lower or "document" in last_msg_lower or "explain" in last_msg_lower or "concept" in last_msg_lower or "what is" in last_msg_lower or "price" not in last_msg_lower:
+                if not is_purchase_calc and ("search" in last_msg_lower or "blockchain" in last_msg_lower or "document" in last_msg_lower or "explain" in last_msg_lower or "concept" in last_msg_lower or "what is" in last_msg_lower or "price" not in last_msg_lower):
                     needed.append("RAGSearchAgent")
             
             if needed:
@@ -90,19 +96,43 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
             )
             
         elif self.agent_name == "CryptoPricingAgent":
-            if tool_result:
-                res_val = tool_result.result if hasattr(tool_result, "result") else ""
-                reply_contents.append(f"[MOCK RESPONSE] Based on the pricing service: {res_val}")
+            is_calculation = "buy" in last_msg_lower or "calculate" in last_msg_lower or "purchase" in last_msg_lower or "how many" in last_msg_lower
+            if is_calculation:
+                if has_calc_result:
+                    calc_val = next(results[cid] for cid in results if calls.get(cid) == "calculate_crypto_purchase")
+                    reply_contents.append(f"[MOCK RESPONSE] Purchase calculation complete: {calc_val}")
+                elif has_price_result:
+                    usd_val = 500.0
+                    import re
+                    match = re.search(r'\$?(\d+(?:\.\d+)?)', last_msg_lower)
+                    if match:
+                        usd_val = float(match.group(1))
+                    reply_contents.append(Content.from_function_call(
+                        name="calculate_crypto_purchase",
+                        arguments={"usd_amount": usd_val, "crypto_price": 65000.0},
+                        call_id=f"calc_{uuid.uuid4().hex[:8]}"
+                    ))
+                else:
+                    reply_contents.append(Content.from_function_call(
+                        name="get_crypto_price",
+                        arguments={"coin_id": "bitcoin"},
+                        call_id=f"crypto_{uuid.uuid4().hex[:8]}"
+                    ))
             else:
-                reply_contents.append(Content.from_function_call(
-                    name="get_crypto_price",
-                    arguments={"coin_id": "bitcoin"},
-                    call_id=f"crypto_{uuid.uuid4().hex[:8]}"
-                ))
+                if has_price_result:
+                    price_val = next(results[cid] for cid in results if calls.get(cid) == "get_crypto_price")
+                    reply_contents.append(f"[MOCK RESPONSE] Based on the pricing service: {price_val}")
+                else:
+                    reply_contents.append(Content.from_function_call(
+                        name="get_crypto_price",
+                        arguments={"coin_id": "bitcoin"},
+                        call_id=f"crypto_{uuid.uuid4().hex[:8]}"
+                    ))
                 
         elif self.agent_name == "OpenZeppelinAgent":
-            if tool_result:
-                contract_code = tool_result.result if hasattr(tool_result, "result") else ""
+            has_oz_result = any(calls.get(cid) == "openzeppelin_develop_contract" for cid in results)
+            if has_oz_result:
+                contract_code = next(results[cid] for cid in results if calls.get(cid) == "openzeppelin_develop_contract")
                 reply_contents.append(
                     f"Here is your Solidity contract:\n{contract_code}"
                 )
@@ -197,11 +227,23 @@ def mock_agent_adapters_and_clients(monkeypatch):
             f"}}"
         )
 
+    def calculate_crypto_purchase_func(usd_amount: float, crypto_price: float) -> str:
+        if crypto_price <= 0:
+            return "Error: Crypto price must be greater than zero."
+        amount = usd_amount / crypto_price
+        return f"With {usd_amount} USD, you can buy approximately {amount:.8f} units of the cryptocurrency at the price of {crypto_price} USD."
+
     def mock_crypto_init(self, client):
         crypto_tool = FunctionTool(
             name="get_crypto_price",
             description="Get the live price of a cryptocurrency in USD.",
             func=crypto_get_price,
+            approval_mode="never_require"
+        )
+        calculation_tool = FunctionTool(
+            name="calculate_crypto_purchase",
+            description="Calculate the amount of cryptocurrency that can be purchased with a given amount of USD based on the current price.",
+            func=calculate_crypto_purchase_func,
             approval_mode="never_require"
         )
         from agent_framework import Agent
@@ -210,10 +252,13 @@ def mock_agent_adapters_and_clients(monkeypatch):
             id="CryptoPricingAgent",
             name="CryptoPricingAgent",
             client=client,
-            tools=[crypto_tool],
+            tools=[crypto_tool, calculation_tool],
             instructions=(
                 "You are a Crypto Pricing Agent. Use the coingecko/crypto tool to fetch live "
-                "prices for requested cryptocurrencies, then report them back to the user."
+                "prices for requested cryptocurrencies, then report them back to the user.\n\n"
+                "If the user explicitly requests to calculate how much cryptocurrency they can purchase with a given amount of USD, you must:\n"
+                "1. Fetch the live price of the requested cryptocurrency in USD first using the get_crypto_price tool.\n"
+                "2. Call the `calculate_crypto_purchase` tool with the USD amount and the fetched cryptocurrency price to compute the purchase amount."
             ),
             require_per_service_call_history_persistence=True
         )

@@ -35,8 +35,9 @@ class Router(Executor):
         triage_msg = next((m.text for m in reversed(response.full_conversation) if getattr(m, "author_name", None) == "TriageAgent"), "")
         triage_msg_lower = triage_msg.lower() if triage_msg else ""
 
-        is_rag_needed = "ragsearchagent" in triage_msg_lower or ("search" in user_msg_lower or "blockchain" in user_msg_lower or "document" in user_msg_lower or ("bitcoin" in user_msg_lower and ("concept" in user_msg_lower or "what is" in user_msg_lower or "explain" in user_msg_lower or "price" not in user_msg_lower)))
-        is_crypto_needed = "cryptopricingagent" in triage_msg_lower or ("price" in user_msg_lower or "pricing" in user_msg_lower or "coingecko" in user_msg_lower)
+        is_purchase_calc = any(k in user_msg_lower for k in ("buy", "calculate", "purchase", "how many"))
+        is_rag_needed = "ragsearchagent" in triage_msg_lower or ("search" in user_msg_lower or "blockchain" in user_msg_lower or "document" in user_msg_lower or ("bitcoin" in user_msg_lower and not is_purchase_calc and ("concept" in user_msg_lower or "what is" in user_msg_lower or "explain" in user_msg_lower or "price" not in user_msg_lower)))
+        is_crypto_needed = "cryptopricingagent" in triage_msg_lower or ("price" in user_msg_lower or "pricing" in user_msg_lower or "coingecko" in user_msg_lower or is_purchase_calc)
         is_oz_needed = "openzeppelinagent" in triage_msg_lower or ("solidity" in user_msg_lower or "contract" in user_msg_lower or "openzeppelin" in user_msg_lower)
 
         # Find the index of the last user message to isolate responses of the current turn

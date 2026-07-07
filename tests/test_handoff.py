@@ -154,3 +154,23 @@ def test_single_turn_multi_intent_routing():
         assert "- Crypto price:" in response_text
 
 
+def test_crypto_purchase_calculation():
+    """
+    Test that the agent successfully calculates cryptocurrency purchase amount when requested.
+    """
+    with TestClient(app) as client:
+        payload = {
+            "message": "Calculate how many Bitcoins I can buy with $130000",
+            "thread_id": "thread_crypto_purchase"
+        }
+        response = client.post("/api/v1/chat", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert "response_text" in data
+        
+        # At $65,000 per BTC, $130,000 should purchase approximately 2.00000000 units
+        response_text = data["response_text"]
+        assert "approximately 2.00000000" in response_text
+
+
+
