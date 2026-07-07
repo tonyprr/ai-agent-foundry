@@ -167,6 +167,10 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
             reply_contents.append(
                 "Here is a bullet summary of the answers:\n" + "\n".join(bullets)
             )
+
+        elif self.agent_name == "RouterAgent":
+            # Very basic mock routing logic mirroring the deterministic router
+            reply_contents.append("Finalizer")
                 
         msg_contents = []
         has_func_call = False
@@ -198,6 +202,7 @@ def mock_agent_adapters_and_clients(monkeypatch):
     from app.adapters.driven.agent.agents.crypto_pricing_agent import CryptoPricingAgent
     from app.adapters.driven.agent.agents.openzeppelin_agent import OpenZeppelinAgent
     from app.adapters.driven.agent.agents.summarizer_agent import SummarizerAgent
+    from app.adapters.driven.agent.agents.router_agent import RouterAgent
     from agent_framework import FunctionTool
 
     # 1. Patch search adapter to return SimpleMockContextProvider
@@ -298,6 +303,20 @@ def mock_agent_adapters_and_clients(monkeypatch):
             require_per_service_call_history_persistence=True
         )
 
+    def mock_router_init(self, client):
+        from agent_framework import Agent
+        Agent.__init__(
+            self,
+            id="RouterAgent",
+            name="RouterAgent",
+            client=client,
+            instructions=(
+                "You are the dynamic Router Agent."
+            ),
+            require_per_service_call_history_persistence=True
+        )
+
     monkeypatch.setattr(CryptoPricingAgent, "__init__", mock_crypto_init)
     monkeypatch.setattr(OpenZeppelinAgent, "__init__", mock_oz_init)
     monkeypatch.setattr(SummarizerAgent, "__init__", mock_summarizer_init)
+    monkeypatch.setattr(RouterAgent, "__init__", mock_router_init)

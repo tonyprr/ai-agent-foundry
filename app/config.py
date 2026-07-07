@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     azure_ai_foundry_endpoint: Optional[str] = None
     azure_ai_model_deployment_name: str = "gpt-4.1-mini-demo"
 
+    # Agent Orchestration Config
+    router_type: Literal["deterministic", "agentic"] = "deterministic"
+
     # Azure AI Search Config
     azure_search_endpoint: Optional[str] = None
     azure_search_index_name: Optional[str] = None

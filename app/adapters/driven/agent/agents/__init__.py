@@ -3,6 +3,7 @@ from .rag_search_agent import RAGSearchAgent
 from .crypto_pricing_agent import CryptoPricingAgent
 from .openzeppelin_agent import OpenZeppelinAgent
 from .summarizer_agent import SummarizerAgent
+from .router_agent import RouterAgent
 
 __all__ = [
     "TriageAgent",
@@ -10,4 +11,5 @@ __all__ = [
     "CryptoPricingAgent",
     "OpenZeppelinAgent",
     "SummarizerAgent",
+    "RouterAgent",
 ]

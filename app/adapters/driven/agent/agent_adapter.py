@@ -36,6 +36,7 @@ from app.adapters.driven.agent.agents import (
     RAGSearchAgent,
     SummarizerAgent,
     TriageAgent,
+    RouterAgent,
 )
 from app.adapters.driven.agent.workflow_support import CheckpointStorage, Finalizer, Router
 
@@ -52,6 +53,7 @@ class AgentAdapter(AgentPort):
     _crypto_pricing_agent = None
     _openzeppelin_agent = None
     _summarizer_agent = None
+    _router_agent = None
 
     def __init__(self, settings: Settings, search_adapter: SearchPort, session_store: SessionStorePort):
         self._settings = settings
@@ -89,6 +91,10 @@ class AgentAdapter(AgentPort):
             summarizer_client = self._get_chat_client("SummarizerAgent")
             AgentAdapter._summarizer_agent = SummarizerAgent(client=summarizer_client)
 
+        if AgentAdapter._router_agent is None:
+            router_client = self._get_chat_client("RouterAgent")
+            AgentAdapter._router_agent = RouterAgent(client=router_client)
+
         def clean_history(messages: list[Message]) -> list[Message]:
             cleaned = []
             for msg in messages:
@@ -111,7 +117,20 @@ class AgentAdapter(AgentPort):
 
         
         router = Router()
+        router_agent_exec = AgentExecutor(AgentAdapter._router_agent, id="RouterAgent", context_mode="custom", context_filter=clean_history)
         finalizer = Finalizer()
+
+        router_node = router_agent_exec if self._settings.router_type == "agentic" else router
+
+        def _get_route_target(r: AgentExecutorResponse) -> str:
+            if hasattr(r, "route_to"):
+                return r.route_to
+            if hasattr(r, "agent_response") and r.agent_response and r.agent_response.text:
+                text = r.agent_response.text
+                for target in ["RAGSearchAgent", "CryptoPricingAgent", "OpenZeppelinAgent", "SummarizerAgent", "Finalizer"]:
+                    if target in text:
+                        return target
+            return "Finalizer"
 
         builder = (
             WorkflowBuilder(
@@ -120,21 +139,21 @@ class AgentAdapter(AgentPort):
                 checkpoint_storage=self._checkpoint_storage,
                 output_from=[finalizer]
             )
-            .add_edge(triage_exec, router)
+            .add_edge(triage_exec, router_node)
             .add_switch_case_edge_group(
-                router,
+                router_node,
                 [
-                    Case(condition=lambda r: getattr(r, "route_to", "") == "RAGSearchAgent", target=rag_exec),
-                    Case(condition=lambda r: getattr(r, "route_to", "") == "CryptoPricingAgent", target=crypto_exec),
-                    Case(condition=lambda r: getattr(r, "route_to", "") == "OpenZeppelinAgent", target=oz_exec),
-                    Case(condition=lambda r: getattr(r, "route_to", "") == "SummarizerAgent", target=summarizer_exec),
+                    Case(condition=lambda r: _get_route_target(r) == "RAGSearchAgent", target=rag_exec),
+                    Case(condition=lambda r: _get_route_target(r) == "CryptoPricingAgent", target=crypto_exec),
+                    Case(condition=lambda r: _get_route_target(r) == "OpenZeppelinAgent", target=oz_exec),
+                    Case(condition=lambda r: _get_route_target(r) == "SummarizerAgent", target=summarizer_exec),
                     Default(target=finalizer)
                 ]
             )
-            .add_edge(rag_exec, router)
-            .add_edge(crypto_exec, router)
-            .add_edge(oz_exec, router)
-            .add_edge(summarizer_exec, router)
+            .add_edge(rag_exec, router_node)
+            .add_edge(crypto_exec, router_node)
+            .add_edge(oz_exec, router_node)
+            .add_edge(summarizer_exec, router_node)
             .add_edge(finalizer, triage_exec)
         )
         
@@ -252,6 +271,7 @@ class AgentAdapter(AgentPort):
             "CryptoPricingAgent",
             "OpenZeppelinAgent",
             "SummarizerAgent",
+            "RouterAgent",
         }
         
         metrics = {}
