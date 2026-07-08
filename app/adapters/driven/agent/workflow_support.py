@@ -36,8 +36,13 @@ class Router(Executor):
         triage_msg_lower = triage_msg.lower() if triage_msg else ""
 
         is_purchase_calc = any(k in user_msg_lower for k in ("buy", "calculate", "purchase", "how many"))
-        is_rag_needed = "ragsearchagent" in triage_msg_lower or ("search" in user_msg_lower or "blockchain" in user_msg_lower or "document" in user_msg_lower or ("bitcoin" in user_msg_lower and not is_purchase_calc and ("concept" in user_msg_lower or "what is" in user_msg_lower or "explain" in user_msg_lower or "price" not in user_msg_lower)))
+        is_market_analysis_needed = any(k in user_msg_lower for k in ("report", "analysis", "deep status report", "financial report", "market analysis"))
+        is_rag_needed = "ragsearchagent" in triage_msg_lower or ("search" in user_msg_lower or "blockchain" in user_msg_lower or "document" in user_msg_lower or ("bitcoin" in user_msg_lower and not is_purchase_calc and not is_market_analysis_needed and ("concept" in user_msg_lower or "what is" in user_msg_lower or "explain" in user_msg_lower or "price" not in user_msg_lower)))
         is_crypto_needed = "cryptopricingagent" in triage_msg_lower or ("price" in user_msg_lower or "pricing" in user_msg_lower or "coingecko" in user_msg_lower or is_purchase_calc)
+        
+        if is_market_analysis_needed:
+            is_crypto_needed = False
+            
         is_oz_needed = "openzeppelinagent" in triage_msg_lower or ("solidity" in user_msg_lower or "contract" in user_msg_lower or "openzeppelin" in user_msg_lower)
 
         # Find the index of the last user message to isolate responses of the current turn
@@ -49,6 +54,7 @@ class Router(Executor):
         has_rag_responded = False
         has_crypto_responded = False
         has_oz_responded = False
+        has_market_analysis_responded = False
         has_summarizer_responded = False
 
         if last_user_idx != -1:
@@ -58,6 +64,8 @@ class Router(Executor):
                     has_rag_responded = True
                 elif author == "CryptoPricingAgent":
                     has_crypto_responded = True
+                elif author == "MarketAnalysisAgent":
+                    has_market_analysis_responded = True
                 elif author == "OpenZeppelinAgent":
                     has_oz_responded = True
                 elif author == "SummarizerAgent":
@@ -66,11 +74,13 @@ class Router(Executor):
         route_to = "Finalizer"
         if is_oz_needed and not has_oz_responded:
             route_to = "OpenZeppelinAgent"
+        elif is_market_analysis_needed and not has_market_analysis_responded:
+            route_to = "MarketAnalysisAgent"
         elif is_crypto_needed and not has_crypto_responded:
             route_to = "CryptoPricingAgent"
         elif is_rag_needed and not has_rag_responded:
             route_to = "RAGSearchAgent"
-        elif (sum([is_rag_needed, is_crypto_needed, is_oz_needed]) > 1) and not has_summarizer_responded:
+        elif (sum([is_rag_needed, is_crypto_needed, is_oz_needed, is_market_analysis_needed]) > 1) and not has_summarizer_responded:
             route_to = "SummarizerAgent"
 
         # Dynamically set routing attribute
@@ -86,12 +96,13 @@ class Finalizer(Executor):
     async def finalize(self, response: AgentExecutorResponse, ctx: WorkflowContext[list[Message], str]) -> None:
         last_user_idx = -1
         for idx, m in enumerate(response.full_conversation):
-            if m.role == "user":
+            if m.role == "user" and any(c.type == "text" for c in getattr(m, "contents", [])):
                 last_user_idx = idx
 
         rag_response = ""
         crypto_response = ""
         oz_response = ""
+        market_analysis_response = ""
         summarizer_response = ""
 
         if last_user_idx != -1:
@@ -101,6 +112,8 @@ class Finalizer(Executor):
                     rag_response = m.text
                 elif author == "CryptoPricingAgent":
                     crypto_response = m.text
+                elif author == "MarketAnalysisAgent":
+                    market_analysis_response = m.text
                 elif author == "OpenZeppelinAgent":
                     oz_response = m.text
                 elif author == "SummarizerAgent":
@@ -111,6 +124,8 @@ class Finalizer(Executor):
             parts.append(rag_response)
         if crypto_response:
             parts.append(crypto_response)
+        if market_analysis_response:
+            parts.append(market_analysis_response)
         if oz_response:
             parts.append(oz_response)
 

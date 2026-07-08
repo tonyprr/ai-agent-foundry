@@ -38,6 +38,7 @@ from app.adapters.driven.agent.agents import (
     TriageAgent,
     RouterAgent,
 )
+from app.adapters.driven.agent.agents.market_analysis import build_market_analysis_workflow_agent
 from app.adapters.driven.agent.workflow_support import CheckpointStorage, Finalizer, Router
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class AgentAdapter(AgentPort):
     _openzeppelin_agent = None
     _summarizer_agent = None
     _router_agent = None
+    _market_analysis_agent = None
 
     def __init__(self, settings: Settings, search_adapter: SearchPort, session_store: SessionStorePort):
         self._settings = settings
@@ -95,6 +97,10 @@ class AgentAdapter(AgentPort):
             router_client = self._get_chat_client("RouterAgent")
             AgentAdapter._router_agent = RouterAgent(client=router_client)
 
+        if AgentAdapter._market_analysis_agent is None:
+            ma_client = self._get_chat_client("MarketAnalysisAgent")
+            AgentAdapter._market_analysis_agent = build_market_analysis_workflow_agent(client=ma_client)
+
         def clean_history(messages: list[Message]) -> list[Message]:
             cleaned = []
             for msg in messages:
@@ -114,6 +120,7 @@ class AgentAdapter(AgentPort):
         crypto_exec = AgentExecutor(AgentAdapter._crypto_pricing_agent, id="CryptoPricingAgent", context_mode="custom", context_filter=clean_history)
         oz_exec = AgentExecutor(AgentAdapter._openzeppelin_agent, id="OpenZeppelinAgent", context_mode="custom", context_filter=clean_history)
         summarizer_exec = AgentExecutor(AgentAdapter._summarizer_agent, id="SummarizerAgent", context_mode="custom", context_filter=clean_history)
+        market_analysis_exec = AgentExecutor(AgentAdapter._market_analysis_agent, id="MarketAnalysisAgent", context_mode="custom", context_filter=clean_history)
 
         
         router = Router()
@@ -127,7 +134,7 @@ class AgentAdapter(AgentPort):
                 return r.route_to
             if hasattr(r, "agent_response") and r.agent_response and r.agent_response.text:
                 text = r.agent_response.text
-                for target in ["RAGSearchAgent", "CryptoPricingAgent", "OpenZeppelinAgent", "SummarizerAgent", "Finalizer"]:
+                for target in ["RAGSearchAgent", "MarketAnalysisAgent", "CryptoPricingAgent", "OpenZeppelinAgent", "SummarizerAgent", "Finalizer"]:
                     if target in text:
                         return target
             return "Finalizer"
@@ -144,6 +151,7 @@ class AgentAdapter(AgentPort):
                 router_node,
                 [
                     Case(condition=lambda r: _get_route_target(r) == "RAGSearchAgent", target=rag_exec),
+                    Case(condition=lambda r: _get_route_target(r) == "MarketAnalysisAgent", target=market_analysis_exec),
                     Case(condition=lambda r: _get_route_target(r) == "CryptoPricingAgent", target=crypto_exec),
                     Case(condition=lambda r: _get_route_target(r) == "OpenZeppelinAgent", target=oz_exec),
                     Case(condition=lambda r: _get_route_target(r) == "SummarizerAgent", target=summarizer_exec),
@@ -151,6 +159,7 @@ class AgentAdapter(AgentPort):
                 ]
             )
             .add_edge(rag_exec, router_node)
+            .add_edge(market_analysis_exec, router_node)
             .add_edge(crypto_exec, router_node)
             .add_edge(oz_exec, router_node)
             .add_edge(summarizer_exec, router_node)
@@ -272,6 +281,7 @@ class AgentAdapter(AgentPort):
             "OpenZeppelinAgent",
             "SummarizerAgent",
             "RouterAgent",
+            "MarketAnalysisAgent",
         }
         
         metrics = {}

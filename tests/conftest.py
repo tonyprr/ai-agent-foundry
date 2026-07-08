@@ -64,6 +64,11 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                 for c in m.contents:
                     if c.type == "function_result":
                         results[c.call_id] = c.result if hasattr(c, "result") else str(c)
+            elif m.role == "user":
+                for c in m.contents:
+                    if c.type == "function_approval_response":
+                        if c.approved:
+                            results[c.call_id] = "pragma solidity ^0.8.0;" # Dummy result for approval
 
         has_price_result = any(calls.get(cid) == "get_crypto_price" for cid in results)
         has_calc_result = any(calls.get(cid) == "calculate_crypto_purchase" for cid in results)
@@ -131,10 +136,17 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                 
         elif self.agent_name == "OpenZeppelinAgent":
             has_oz_result = any(calls.get(cid) == "openzeppelin_develop_contract" for cid in results)
-            if has_oz_result:
-                contract_code = next(results[cid] for cid in results if calls.get(cid) == "openzeppelin_develop_contract")
+            
+            # Also check if there's an approval in the messages
+            has_approval = any(
+                c.approved 
+                for m in messages if m.role == "user" 
+                for c in m.contents if c.type == "function_approval_response"
+            )
+            
+            if has_oz_result or has_approval:
                 reply_contents.append(
-                    f"Here is your Solidity contract:\n{contract_code}"
+                    "Here is your Solidity contract:\npragma solidity ^0.8.0;"
                 )
             else:
                 reply_contents.append(Content.from_function_call(
@@ -142,6 +154,49 @@ class TestMockChatClient(FunctionInvocationLayer, ChatMiddlewareLayer, ChatTelem
                     arguments={"contract_type": "ERC20"},
                     call_id=f"openzeppelin_{uuid.uuid4().hex[:8]}"
                 ))
+                
+        elif self.agent_name == "RouterAgent":
+            # Mock the router agent logic based on the user's initial query in history
+            last_user_idx = -1
+            user_msg = ""
+            for idx, msg in enumerate(messages):
+                if msg.role == "user" and any(c.type == "text" for c in msg.contents):
+                    last_user_idx = idx
+                    user_msg = next((c.text for c in msg.contents if c.type == "text"), "")
+                    
+            user_msg_lower = user_msg.lower()
+            
+            is_purchase_calc = any(k in user_msg_lower for k in ("buy", "calculate", "purchase", "how many"))
+            is_market_analysis = any(k in user_msg_lower for k in ("report", "analysis", "deep status report", "financial report", "market analysis"))
+            is_crypto = "price" in user_msg_lower or "pricing" in user_msg_lower or "coingecko" in user_msg_lower or is_purchase_calc
+            is_rag = "search" in user_msg_lower or "blockchain" in user_msg_lower or "document" in user_msg_lower or ("bitcoin" in user_msg_lower and not is_purchase_calc and not is_market_analysis and "price" not in user_msg_lower)
+            is_oz = "solidity" in user_msg_lower or "contract" in user_msg_lower or "openzeppelin" in user_msg_lower
+            
+            # Check what already responded after the last user message
+            has_rag = False
+            has_crypto = False
+            has_oz = False
+            has_ma = False
+            if last_user_idx != -1:
+                for m in messages[last_user_idx+1:]:
+                    author = getattr(m, "author_name", None)
+                    if author == "RAGSearchAgent": has_rag = True
+                    elif author == "CryptoPricingAgent": has_crypto = True
+                    elif author == "OpenZeppelinAgent": has_oz = True
+                    elif author == "MarketAnalysisAgent": has_ma = True
+            
+            if is_oz and not has_oz:
+                reply_contents.append("OpenZeppelinAgent")
+            elif is_market_analysis and not has_ma:
+                reply_contents.append("MarketAnalysisAgent")
+            elif is_crypto and not has_crypto:
+                reply_contents.append("CryptoPricingAgent")
+            elif is_rag and not has_rag:
+                reply_contents.append("RAGSearchAgent")
+            elif sum([is_rag, is_crypto, is_oz, is_market_analysis]) > 1 and not any(getattr(m, "author_name", None) == "SummarizerAgent" for m in messages[last_user_idx+1:] if last_user_idx != -1):
+                reply_contents.append("SummarizerAgent")
+            else:
+                reply_contents.append("Finalizer")
 
         elif self.agent_name == "SummarizerAgent":
             rag_res = ""
